@@ -1,0 +1,104 @@
+2026-01-23 11:12:11,267 - INFO - Connected to MongoDB at mongodb://user:pass1@localhost:27017/ db=ms_baseline
+2026-01-23 11:12:37,986 - INFO - infer_search_query -> LLM Call Prompt: 
+     You are a product search inference agent.
+    
+    
+
+    Task:
+    - Infer the search preferences from user raw query for parts only related to product name and pricing filter
+    - Exclude shipment and delivery preferences from search preferences, such as delivery speed, avoid or not weekend, within days of delivery
+    - Respect user preference summary if provided
+    - Return final result ONLY valid JSON with below schema:
+    
+    Schema:
+    {
+            "product_name": string,
+            "min_price": number,
+            "max_price": number
+    }
+
+    User raw query:
+    looking for headphone with noise cancelling under 300$, and wanna delivery cheap and only on week days within 3 days
+
+    
+2026-01-23 11:13:19,176 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-23 11:13:34,507 - INFO - infer_search_query -> LLM Raw response: {
+    "product_name": "headphone with noise cancelling",
+    "min_price": 0,
+    "max_price": 300
+}
+2026-01-23 11:13:34,507 - INFO - infer_search_query -> LLM Token Metrics: input_tokens: 163, output_tokens: 33, total_tokens: 196
+2026-01-23 11:13:34,624 - INFO - HTTP Request: POST http://localhost:8002/price "HTTP/1.1 200 OK"
+2026-01-23 11:13:34,625 - INFO - ranking_node -> LLM Call Prompt: 
+    You are a product search ranking agent.
+    
+    Task:
+    - Fill the final result by matching each product and price by sku from the Prices and Products input  
+    - Respect user search preferences if provided
+    - Return final result ONLY valid JSON with below schema:
+    
+    
+    
+    Schema:
+    {
+        "results": [
+          {
+            "sku": string,
+            "name": string,
+            "description": string,
+            "price": number,
+            "score": number
+          }
+        ]
+    }
+
+    
+    Prices:
+    {'b2926dc2-cc6d-4c3e-ae40-7a127c173b16': 200.0}
+    
+    Products:
+    [
+  {
+    "sku": "b2926dc2-cc6d-4c3e-ae40-7a127c173b16",
+    "name": "Airpod",
+    "description": "Noise cancelling headphone Airpod",
+    "db_score": 1.875
+  }
+]
+    
+2026-01-23 11:14:22,177 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-23 11:15:08,136 - INFO - ranking_node -> LLM Raw response: {
+    "results": [
+        {
+            "sku": "b2926dc2-cc6d-4c3e-ae40-7a127c173b16",
+            "name": "Airpod",
+            "description": "Noise cancelling headphone Airpod",
+            "price": 200.0,
+            "score": 1.875
+        }
+    ]
+}
+2026-01-23 11:15:08,137 - INFO - ranking_node -> LLM Token Metrics: input_tokens: 252, output_tokens: 94, total_tokens: 346
+2026-01-23 11:15:08,138 - INFO - update_memory_node -> LLM Call Prompt: 
+        You are a memory summarization agent.
+        
+        Tasks:
+        - Update the summary concisely about search preferences of user and top results in this format:
+        search preferences: SUMMARY_ABOUT_QUERY
+        top results: SUMMARY_OF_TOP_RESULTS
+        
+        Existing summary:
+        None
+        
+        New interaction:
+        
+        User searched for: {'product_name': 'headphone with noise cancelling', 'min_price': 0, 'max_price': 300}
+        Top results: ['Noise cancelling headphone Airpod']
+        
+        
+        
+2026-01-23 11:15:30,676 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-23 11:15:57,380 - INFO - update_memory_node -> LLM Raw response: search preferences: The user is looking for a headphones that includes noise cancelling features. Their budget range is set between $0 to $300.
+top results: Among the options available, 'Noise cancelling headphone Airpod' stands out as the top result meeting their criteria.
+2026-01-23 11:15:57,380 - INFO - update_memory_node -> LLM Token Metrics: input_tokens: 127, output_tokens: 56, total_tokens: 183
+2026-01-23 11:18:36,828 - INFO - MongoDB connection closed

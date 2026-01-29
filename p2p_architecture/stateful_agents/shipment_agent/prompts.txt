@@ -1,0 +1,14 @@
+
+
+
+Shipment Search Agent
+
+1. single-turn explicit
+    - Please ship this between Monday to Wednesday with the cheapest shipping option available.
+
+2. single-turn vague
+
+3. multi-turn completing
+
+
+4. multi-turn conflicting

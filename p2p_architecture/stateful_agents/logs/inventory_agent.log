@@ -1,0 +1,164 @@
+
+2026-01-22 20:15:36,338 - INFO - Connected to MongoDB at mongodb://user:pass1@localhost:27017/ db=ms_baseline
+2026-01-22 20:15:52,695 - INFO - HTTP Request: POST http://localhost:8002/price "HTTP/1.1 200 OK"
+2026-01-22 20:15:52,697 - INFO - LLM Call Prompt: 
+    You are a product search ranking agent.
+    
+    Task:
+    - Fill the final result by matching each product and price by sku from the Prices and Products input  
+    - Respect user search preferences if provided
+    - Return final result ONLY valid JSON with below schema:
+    
+    
+    
+    Schema:
+    {
+        "results": [
+          {
+            "sku": string,
+            "name": string,
+            "description": string,
+            "price": number,
+            "score": number
+          }
+        ]
+    }
+
+    
+    Prices:
+    {'b2926dc2-cc6d-4c3e-ae40-7a127c173b16': 200.0}
+    
+    Products:
+    [
+  {
+    "sku": "b2926dc2-cc6d-4c3e-ae40-7a127c173b16",
+    "name": "Airpod",
+    "description": "Noise cancelling headphone Airpod",
+    "db_score": 1.875
+  }
+]
+    
+2026-01-22 20:16:54,186 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-22 20:17:37,075 - INFO - LLM Raw response: {
+    "results": [
+        {
+            "sku": "b2926dc2-cc6d-4c3e-ae40-7a127c173b16",
+            "name": "Airpod",
+            "description": "Noise cancelling headphone Airpod",
+            "price": 200.0,
+            "score": 1.875
+        }
+    ]
+}
+2026-01-22 20:17:37,077 - INFO - LLM Token Metrics: input_tokens: 252, output_tokens: 94, total_tokens: 346
+2026-01-22 20:17:58,116 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-22 20:20:16,681 - INFO - Connected to MongoDB at mongodb://user:pass1@localhost:27017/ db=ms_baseline
+2026-01-22 20:20:18,507 - INFO - HTTP Request: POST http://localhost:8002/price "HTTP/1.1 200 OK"
+2026-01-22 20:20:18,516 - INFO - LLM Call Prompt: 
+    You are a product search ranking agent.
+    
+    Task:
+    - Fill the final result by matching each product and price by sku from the Prices and Products input  
+    - Respect user search preferences if provided
+    - Return final result ONLY valid JSON with below schema:
+    
+    
+    
+    Schema:
+    {
+        "results": [
+          {
+            "sku": string,
+            "name": string,
+            "description": string,
+            "price": number,
+            "score": number
+          }
+        ]
+    }
+
+    
+    Prices:
+    {'b2926dc2-cc6d-4c3e-ae40-7a127c173b16': 200.0}
+    
+    Products:
+    [
+  {
+    "sku": "b2926dc2-cc6d-4c3e-ae40-7a127c173b16",
+    "name": "Airpod",
+    "description": "Noise cancelling headphone Airpod",
+    "db_score": 1.875
+  }
+]
+    
+2026-01-22 20:21:18,007 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-22 20:22:02,632 - INFO - LLM Raw response: {
+    "results": [
+        {
+            "sku": "b2926dc2-cc6d-4c3e-ae40-7a127c173b16",
+            "name": "Airpod",
+            "description": "Noise cancelling headphone Airpod",
+            "price": 200.0,
+            "score": 1.875
+        }
+    ]
+}
+2026-01-22 20:22:02,632 - INFO - LLM Token Metrics: input_tokens: 252, output_tokens: 94, total_tokens: 346
+2026-01-22 20:22:23,258 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-22 20:23:12,603 - INFO - HTTP Request: POST http://localhost:8002/price "HTTP/1.1 200 OK"
+2026-01-22 20:23:12,605 - INFO - LLM Call Prompt: 
+    You are a product search ranking agent.
+    
+    Task:
+    - Fill the final result by matching each product and price by sku from the Prices and Products input  
+    - Respect user search preferences if provided
+    - Return final result ONLY valid JSON with below schema:
+    
+    User preference summary:
+search preferences: User is looking for noise cancelling headphones with a focus on affordability.
+shipment preferences: The user requires delivery to be cheap and within one week.
+
+
+    
+    Schema:
+    {
+        "results": [
+          {
+            "sku": string,
+            "name": string,
+            "description": string,
+            "price": number,
+            "score": number
+          }
+        ]
+    }
+
+    
+    Prices:
+    {'b2926dc2-cc6d-4c3e-ae40-7a127c173b16': 200.0}
+    
+    Products:
+    [
+  {
+    "sku": "b2926dc2-cc6d-4c3e-ae40-7a127c173b16",
+    "name": "Airpod",
+    "description": "Noise cancelling headphone Airpod",
+    "db_score": 1.875
+  }
+]
+    
+2026-01-22 20:24:03,426 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-22 20:24:46,821 - INFO - LLM Raw response: {
+    "results": [
+        {
+            "sku": "b2926dc2-cc6d-4c3e-ae40-7a127c173b16",
+            "name": "Airpod",
+            "description": "Noise cancelling headphone Airpod",
+            "price": 200.0,
+            "score": 1.875
+        }
+    ]
+}
+2026-01-22 20:24:46,821 - INFO - LLM Token Metrics: input_tokens: 289, output_tokens: 94, total_tokens: 383
+2026-01-22 20:25:14,346 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-01-22 20:25:44,054 - INFO - MongoDB connection closed

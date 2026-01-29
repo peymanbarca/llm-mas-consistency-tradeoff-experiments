@@ -1,0 +1,20 @@
+
+Product Search Agent
+
+
+1. single-turn explicit
+
+    - looking for noise cancelling white headphone  under 300$
+
+2. single-turn vague
+
+3. multi-turn completing
+
+
+4. multi-turn conflicting
+
+
+
+
+#######################################################################################
+
