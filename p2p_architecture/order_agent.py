@@ -75,6 +75,14 @@ class OrderCreate(BaseModel):
     delay: float = 0.0
     drop: int = 0
 
+class CartCheckoutReq(BaseModel):
+    cart_id: str
+    shipment_prompt: str
+
+class CartCheckoutRes(BaseModel):
+    order_id: str
+    status: str
+
 
 # -------------------- Agent State --------------------------
 
@@ -388,14 +396,14 @@ graph.add_conditional_edges(
     }
 )
 
-# loop back to reasoning
+# loop back to reasoning at each step
 for n in ["fetch_cart", "price", "reserve", "pay", "rollback", "ship"]:
     graph.add_edge(n, "reason")
 
 order_agent = graph.compile()
 
 
-def checkout_cart_agent(cart_id: str):
+def checkout_cart_agent(cart_id: str, shipment_prompt: str):
     state: OrderState = {
         "trace_id": str(uuid.uuid4()),
         "order_id": str(uuid.uuid4()),
@@ -404,7 +412,7 @@ def checkout_cart_agent(cart_id: str):
         "items": [],
         "final_price": 0.0,
 
-        "atomic_update": True,
+        "atomic_update": False,
         "delay": 0.0,
         "drop": 0,
 
@@ -427,11 +435,11 @@ def checkout_cart_agent(cart_id: str):
     }
 
 
-@app.post("/cart/{cart_id}/checkout")
-async def checkout_cart(cart_id: str):
-    result = checkout_cart_agent(cart_id=cart_id)
-    logger.info(f'Request for checkout_cart processed successfully, cart_id = {cart_id}, result={result}')
-    print(f'Request for checkout_cart processed successfully, cart_id = {cart_id}, result={result}')
+@app.post("/cart/checkout", response_model=CartCheckoutRes, summary="Purchase Shopping Cart")
+async def checkout_cart(req: CartCheckoutReq):
+    result = checkout_cart_agent(cart_id=req.cart_id, shipment_prompt=req.shipment_prompt)
+    logger.info(f'Request for checkout_cart processed successfully, cart_id = {req.cart_id}, result={result}')
+    print(f'Request for checkout_cart processed successfully, cart_id = {req.cart_id}, result={result}')
     return result
 
 

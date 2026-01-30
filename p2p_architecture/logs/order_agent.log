@@ -1,0 +1,2 @@
+2026-01-29 18:47:58,960 - INFO - Connected to MongoDB at mongodb://localhost:27017/ db=ms_baseline
+2026-01-29 19:04:07,259 - INFO - MongoDB connection closed
