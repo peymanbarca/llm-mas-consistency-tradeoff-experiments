@@ -27,7 +27,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB = os.getenv("MONGO_DB", "ms_baseline")
 PORT = int(os.getenv("PORT", 8003))
 
-llm = ChatOllama(model="qwen2", temperature=0.0, reasoning=False)
+llm = ChatOllama(model="llama3", temperature=0.0, reasoning=False)
 
 app = FastAPI(title="Shopping Cart Agent")
 
@@ -83,7 +83,17 @@ async def fetch_cart_tool(state: CartAgentState) -> CartAgentState:
     if not doc:
         logger.exception('Response state of fetch_cart_tool ==> cart not found, \n-------------------------------------')
         print('Response state of fetch_cart_tool ==> cart not found, \n-------------------------------------')
-        raise ValueError("cart not found")
+        if state["action"] == "ADD_ITEM":
+            state["cart"] = {
+                "cart_id": "-1",
+                "items": []
+            }
+            logger.info(
+                'Creating new cart for add item, \n-------------------------------------')
+            print('Creating new cart for add item, \n-------------------------------------')
+            return state
+        else:
+            raise ValueError("cart not found")
 
     state["cart"] = {
         "cart_id": doc["cart_id"],
@@ -102,16 +112,19 @@ async def persist_cart_tool(state: CartAgentState) -> CartAgentState:
 
     cart_id = state["cart_id"]
     if cart_id == "-1":
-        await db.carts.insert_one(
-            {"cart_id": uuid.uuid4()},
-            {"items": state["cart"]["items"]}
-        )
-    else:
-        await db.carts.update_one(
-            {"cart_id": cart_id},
-            {"$set": {"items": state["cart"]["items"]}},
-            upsert=True
-        )
+        cart_id = str(uuid.uuid4())
+        state["cart_id"] = cart_id
+        state["cart"]["cart_id"] = cart_id
+        # await db.carts.insert_one(
+        #     {"cart_id": cart_id},
+        #     {"items": state["cart"]["items"]}
+        # )
+    # else:
+    await db.carts.update_one(
+        {"cart_id": cart_id},
+        {"$set": {"items": state["cart"]["items"]}},
+        upsert=True
+    )
     logger.info('Called successfully of persist_cart_tool')
     print('Called successfully of persist_cart_tool')
     return state
@@ -221,7 +234,10 @@ async def get_cart(cart_id: str):
             "action": "VIEW",
             "item": None,
             "cart": {},
-            "result": {}
+            "result": {},
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_llm_calls": 0,
         }
         logger.info(f'Request for get_cart, cart_id = {cart_id}, state={state}')
         print(f'Request for get_cart, cart_id = {cart_id}, state={state}')
@@ -249,7 +265,10 @@ async def add_item(cart_id: str, item: CartItem):
             "action": "ADD_ITEM",
             "item": item.dict(),
             "cart": {},
-            "result": {}
+            "result": {},
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_llm_calls": 0,
         }
         logger.info(f'Request for add_item, cart_id = {cart_id}, item = {item}, state={state}')
         print(f'Request for add_item, cart_id = {cart_id}, item = {item}, state={state}')
@@ -266,6 +285,7 @@ async def add_item(cart_id: str, item: CartItem):
         )
 
     except Exception as e:
+        logger.exception(e)
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -292,6 +312,7 @@ async def remove_item(cart_id: str, sku: str):
         )
 
     except Exception as e:
+        logger.exception(e)
         raise HTTPException(status_code=400, detail=str(e))
 
 

@@ -159,8 +159,8 @@ def parse_json_response(text: str):
 
 async def infer_shipment_params(state: ShipmentState) -> ShipmentState:
     memory_block = (
-        f"User shipment preference summary:\n{state['memory_summary']}\n\n"
-        if state.get("memory_summary")
+        f"User shipment preference summary:\n{state['previous_memory_summary']}\n\n"
+        if state.get("previous_memory_summary")
         else "No user preferences available.\n\n"
     )
 
@@ -231,7 +231,7 @@ async def verify_shipment_reasoning(state: ShipmentState) -> ShipmentState:
     - Generate shipment_id as UUID
     - success = true only if tracking_id exists
 
-    - Return only a JSON with below schema without intermediate reasoning and analysis text:
+    - Return only a JSON (not python code) with below schema without intermediate reasoning and analysis text:
     Schema:
     {{
       "shipment_id": string,

@@ -5,7 +5,7 @@ import uuid
 import datetime
 import httpx
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import TypedDict, List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -35,7 +35,7 @@ PRICING_SERVICE_URL = "http://127.0.0.1:8002"
 PAYMENT_SERVICE_URL = "http://127.0.0.1:8007/pay-order"
 SHIPMENT_SERVICE_URL = "http://127.0.0.1:8006/book"
 
-llm = ChatOllama(model="qwen2", temperature=0.5, reasoning=False)
+llm = ChatOllama(model="llama3", temperature=0.5, reasoning=False)
 
 app = FastAPI(title="Order Agent")
 
@@ -87,6 +87,7 @@ class CartCheckoutReq(BaseModel):
 class CartCheckoutRes(BaseModel):
     order_id: str
     status: str
+    shipment_prefs: Optional[dict]
     total_input_tokens: int
     total_output_tokens: int
     total_llm_calls: int
@@ -99,6 +100,7 @@ class OrderState(TypedDict):
     order_id: str
     cart_id: str
     shipment_prompt: str
+    user_id: Optional[str]
 
     items: List[dict]
     final_price: float
@@ -110,6 +112,7 @@ class OrderState(TypedDict):
     inventory_status: Optional[str]
     payment_status: Optional[str]
     shipment_status: Optional[str]
+    shipment_prefs: Optional[dict]
 
     decision: Optional[str]
     status: Optional[str]
@@ -195,9 +198,9 @@ def process_payment(state):
     return r.json()
 
 
-def book_shipment(order_id: str, shipment_prompt: str):
+def book_shipment(order_id: str, shipment_prompt: str, user_id: Optional[str]):
     """Book shipment"""
-    r = requests.post(SHIPMENT_SERVICE_URL,
+    r = requests.post(SHIPMENT_SERVICE_URL + f"?user_id={user_id}" if user_id else SHIPMENT_SERVICE_URL,
                       json={"order_id": order_id, "address": "SAMPLE_ADDRESS", "main_query": shipment_prompt},
                       timeout=10)
     r.raise_for_status()
@@ -222,14 +225,15 @@ def orchestrate_reason_node(state: OrderState):
     order_reasoning_prompt = f"""
         You are an autonomous order orchestration agent.
 
-        Your goal is to complete an order workflow.
-        You must decide the next action based on PREVIOUS_ACTION and CURRENT_STATUS input
-        Return ONLY a JSON response not python code
+        Tasks:
+        - Your goal is to complete an order workflow.
+        - You must decide the next_action as output based on PREVIOUS_ACTION and CURRENT_STATUS input
+        - Return ONLY a JSON response not python code
 
-        - Do not return middle steps and thinking procedure in response    
+        - Do not return middle steps and thinking procedure in response
         - Return the next action as valid json in this schema: {{"next_action": string}}
-        
-        Possible actions: 
+
+        Possible actions:
         - FETCH_CART
         - PRICE_CART
         - RESERVE_INVENTORY
@@ -239,11 +243,16 @@ def orchestrate_reason_node(state: OrderState):
         - FINISH
 
         Rules:
-        - if PREVIOUS_ACTION is null or None or empty, choose next action as FETCH_CART
-        - else choose next action based on this workflow:
-            1) FETCH_CART --> 2) PRICE_CART --> 3) RESERVE_INVENTORY --> 4) PROCESS_PAYMENT --> 5) BOOK_SHIPMENT --> 6) FINISH
-            
-        Rule Exceptions:    
+        - If PREVIOUS_ACTION is empty, choose the next_action as FETCH_CART
+        - Else, choose the next_action from this workflow for the input PREVIOUS_ACTION:
+            FETCH_CART -> PRICE_CART
+            PRICE_CART -> RESERVE_INVENTORY
+            RESERVE_INVENTORY  -> PROCESS_PAYMENT
+            PROCESS_PAYMENT -> BOOK_SHIPMENT
+            BOOK_SHIPMENT -> FINISH
+        - Never choose next_action same as PREVIOUS_ACTION
+
+        Rule Exceptions:
         - If CURRENT_STATUS is OUT_OF_STOCK choose next action as FINISH
         - If CURRENT_STATUS is PAYMENT_FAILED choose next action a ROLLBACK_INVENTORY
         - If CURRENT_STATUS is ROLLBACK_INVENTORY, choose next action as FINISH
@@ -384,12 +393,15 @@ def shipment_node(state: OrderState):
     logger.info(f'Calling shipment_node tool ... \n Current State is {state}')
     print(f'Calling shipment_node tool ... \n Current State is {state}')
     try:
-        res = book_shipment(order_id=state["order_id"], shipment_prompt=state["shipment_prompt"])
+        res = book_shipment(order_id=state["order_id"], shipment_prompt=state["shipment_prompt"],
+                            user_id=state["user_id"])
         logger.info(f'Response of shipment_node tool ==> {res}, \n-------------------------------------')
         print(f'Response of shipment_node tool ==> {res}, \n-------------------------------------')
 
         state["shipment_status"] = "BOOKED"
         state["status"] = "COMPLETED"
+
+        state["shipment_prefs"] = res["shipment_prefs"]
         state["total_input_tokens"] += res["total_input_tokens"]
         state["total_output_tokens"] += res["total_output_tokens"]
         state["total_llm_calls"] += res["total_llm_calls"]
@@ -444,12 +456,13 @@ for n in ["fetch_cart", "price", "reserve", "pay", "rollback", "ship"]:
 order_agent = graph.compile()
 
 
-def checkout_cart_agent(cart_id: str, shipment_prompt: str):
+def checkout_cart_agent(cart_id: str, shipment_prompt: str, user_id: Optional[str]):
     state: OrderState = {
         "trace_id": str(uuid.uuid4()),
         "order_id": str(uuid.uuid4()),
         "cart_id": cart_id,
         "shipment_prompt": shipment_prompt,
+        "user_id": user_id,
 
         "items": [],
         "final_price": 0.0,
@@ -473,11 +486,12 @@ def checkout_cart_agent(cart_id: str, shipment_prompt: str):
     logger.info(f'Request for checkout_cart, cart_id = {cart_id}, state={state}')
     print(f'Request for checkout_cart, cart_id = {cart_id}, state={state}')
 
-    final_state = order_agent.invoke(state, config={"recursion_limit": 3})
+    final_state = order_agent.invoke(state, config={"recursion_limit": 14})
 
     return {
         "order_id": final_state["order_id"],
         "status": final_state["status"],
+        "shipment_prefs": final_state.get("shipment_prefs", None),
         "total_input_tokens": final_state["total_input_tokens"],
         "total_output_tokens": final_state["total_output_tokens"],
         "total_llm_calls": final_state["total_llm_calls"]
@@ -485,8 +499,8 @@ def checkout_cart_agent(cart_id: str, shipment_prompt: str):
 
 
 @app.post("/cart/checkout", response_model=CartCheckoutRes, summary="Purchase Shopping Cart")
-async def checkout_cart(req: CartCheckoutReq):
-    result = checkout_cart_agent(cart_id=req.cart_id, shipment_prompt=req.shipment_prompt)
+async def checkout_cart(req: CartCheckoutReq, user_id: Optional[str] = Query(None)):
+    result = checkout_cart_agent(cart_id=req.cart_id, shipment_prompt=req.shipment_prompt, user_id=user_id)
     logger.info(f'Request for checkout_cart processed successfully, cart_id = {req.cart_id}, result={result}')
     print(f'Request for checkout_cart processed successfully, cart_id = {req.cart_id}, result={result}')
     return result

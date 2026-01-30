@@ -25,7 +25,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'  # Define the message format
 )
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://user:pass1@localhost:27017/")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB = os.getenv("MONGO_DB", "ms_baseline")
 PORT = int(os.getenv("PORT", 8001))
 
@@ -192,6 +192,7 @@ async def validate_stock_tool(state: InventoryAgentState) -> InventoryAgentState
             state["effective_available"] = effective_available
             state["result"] = {
                 "order_id": state["order_id"],
+                "items": state["items"],
                 "status": "OUT_OF_STOCK",
                 "failed_sku": item["sku"],
                 "physical_stock": stock,
@@ -361,6 +362,9 @@ async def inventory_reasoning_node(state: InventoryAgentState) -> InventoryAgent
 
     You must make a decision ONLY based on the structured inputs below.
     Do NOT infer or assume missing data.
+    
+    Return ONLY valid JSON with bellow schema without intermediate reasoning and analysis text:
+    {{ "decision": string }}
 
     Decision rules (strict, deterministic):
 
@@ -390,8 +394,6 @@ async def inventory_reasoning_node(state: InventoryAgentState) -> InventoryAgent
 
     Effective Available = {json.dumps(state.get("effective_available", {}))}
 
-    Return ONLY valid JSON:
-    {{ "decision": string }}
     """
 
     ### 🔒 Why this prompt is safe
