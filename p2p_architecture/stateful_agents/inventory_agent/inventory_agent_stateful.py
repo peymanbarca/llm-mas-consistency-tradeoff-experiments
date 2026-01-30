@@ -29,7 +29,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://user:pass1@localhost:27017/")
 MONGO_DB = os.getenv("MONGO_DB", "ms_baseline")
 PORT = int(os.getenv("PORT", 8001))
 
-llm = ChatOllama(model="qwen2", temperature=0.0, reasoning=False)
+llm = ChatOllama(model="llama3", temperature=0.0, reasoning=False)
 
 app = FastAPI(title="Inventory Agent")
 
@@ -52,6 +52,14 @@ class ReservationReq(BaseModel):
     delay: float = 0.0
     drop: int = 0
 
+class ReservationRes(BaseModel):
+    order_id: str
+    items: List = []
+    status: str
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
+
 
 class InventoryAgentState(TypedDict):
     order_id: str
@@ -67,6 +75,10 @@ class InventoryAgentState(TypedDict):
     effective_available: Dict[str, int]   # sku -> available after ledger
 
     result: Optional[Dict[str, Any]]
+
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
 
 
 class LedgerEvent(BaseModel):
@@ -343,7 +355,7 @@ def parse_json_response(text: str):
         return None
 
 
-async def reasoning_node(state: InventoryAgentState) -> InventoryAgentState:
+async def inventory_reasoning_node(state: InventoryAgentState) -> InventoryAgentState:
     prompt = f"""
     You are an inventory reservation decision agent.
 
@@ -388,35 +400,40 @@ async def reasoning_node(state: InventoryAgentState) -> InventoryAgentState:
         ### Explicit gate using effective availability
         ### Low-temperature deterministic behavior
 
-    logger.info(f'LLM Call Prompt: {prompt}')
+    logger.info(f'inventory_reasoning_node -> LLM Call Prompt: {prompt}')
+    st = time.time()
     response = await asyncio.to_thread(llm.invoke, prompt)
-
     raw_response = response.text()
+    et = time.time()
+
     input_tokens = response.usage_metadata.get("input_tokens")
     output_tokens = response.usage_metadata.get("output_tokens")
     total_tokens = response.usage_metadata.get("total_tokens")
     reasoning_text = response.additional_kwargs.get("reasoning_content", None)
     reasoning_tokens = response.usage_metadata.get("output_token_details", {}).get("reasoning", 0)
 
-    print(f'LLM Reasoning Text: {reasoning_text}')
-    logger.info(f'LLM Raw response: {raw_response}')
-    print(f'LLM Raw response: {raw_response}')
+    print(f'inventory_reasoning_node -> LLM Reasoning Text: {reasoning_text}')
+    logger.info(f'inventory_reasoning_node -> LLM Raw response: {raw_response}')
+    print(f'inventory_reasoning_node -> LLM Raw response: {raw_response}')
 
-    logger.info(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}')
-    print(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}')
+    logger.info(f'inventory_reasoning_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+                f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et-st), 3)}')
+    print(f'inventory_reasoning_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+                f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et-st), 3)}')
 
     decision = parse_json_response(raw_response).get("decision", "OUT_OF_STOCK")
 
     state["action"] = decision
+    state["total_input_tokens"] += input_tokens
+    state["total_output_tokens"] += output_tokens
+    state["total_llm_calls"] += 1
     return state
 
 
 def build_inventory_agent():
     g = StateGraph(InventoryAgentState)
 
-    g.add_node("reason", reasoning_node)
+    g.add_node("reason", inventory_reasoning_node)
     g.add_node("validate", validate_stock_tool)
     g.add_node("apply", apply_reservation_tool)
     g.add_node("rollback", rollback_reservation_tool)
@@ -465,7 +482,7 @@ async def reset_stocks(request: dict):
         await db.inventory.insert_one({"sku": item['sku'], "stock": item['stock']})
 
 
-@app.post("/reserve")
+@app.post("/reserve", response_model=ReservationRes)
 async def reserve_stock(req: ReservationReq):
     if not req.items:
         raise HTTPException(status_code=400, detail="empty_cart_items")
@@ -475,7 +492,10 @@ async def reserve_stock(req: ReservationReq):
         "items": [it.dict() for it in req.items],
         "atomic": req.atomic_update,
         "action": None,
-        "result": None
+        "result": None,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_llm_calls": 0,
     }
 
     logger.info(f'Request for reserve_stock, req = {req}, state={state}')
@@ -485,17 +505,36 @@ async def reserve_stock(req: ReservationReq):
 
     logger.info(f'Request for reserve_stock processed successfully, req = {req}, result={out.get("result")}')
     print(f'Request for reserve_stock processed successfully, req = {req}, result={out.get("result")}')
-    return out.get("result")
+
+    return ReservationRes(
+        order_id=out["result"]["order_id"],
+        items=out["result"]["items"],
+        status=out["result"]["status"],
+        total_input_tokens=out["total_input_tokens"],
+        total_output_tokens=out["total_output_tokens"],
+        total_llm_calls=out["total_llm_calls"]
+    )
 
 
-@app.post("/reserve-rollback")
+@app.post("/reserve-rollback", response_model=ReservationRes)
 async def rollback_stock(req: ReservationReq):
     state = {
         "order_id": req.order_id,
         "items": [it.dict() for it in req.items],
         "atomic": req.atomic_update,
         "action": 'ROLLBACK',
-        "result": None
+        "result": None,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_llm_calls": 0,
     }
     out = await inventory_graph.ainvoke(state)
-    return out.get("result")
+
+    return ReservationRes(
+        order_id=out["result"]["order_id"],
+        items=out["result"]["items"],
+        status=out["result"]["status"],
+        total_input_tokens=out["total_input_tokens"],
+        total_output_tokens=out["total_output_tokens"],
+        total_llm_calls=out["total_llm_calls"]
+    )

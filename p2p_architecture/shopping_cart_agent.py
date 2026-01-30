@@ -42,6 +42,9 @@ class CartItem(BaseModel):
 class Cart(BaseModel):
     cart_id: str
     items: List[CartItem] = []
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
 
 
 class CartAgentState(TypedDict):
@@ -50,6 +53,10 @@ class CartAgentState(TypedDict):
     item: Dict[str, Any] | None
     cart: Dict[str, Any]
     result: Dict[str, Any]
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
+
 
 @app.on_event("startup")
 async def startup():
@@ -93,11 +100,18 @@ async def persist_cart_tool(state: CartAgentState) -> CartAgentState:
     logger.info(f'Calling persist_cart_tool ... \n Current State is {state}')
     print(f'Calling persist_cart_tool ... \n Current State is {state}')
 
-    await db.carts.update_one(
-        {"cart_id": state["cart_id"]},
-        {"$set": {"items": state["cart"]["items"]}},
-        upsert=True
-    )
+    cart_id = state["cart_id"]
+    if cart_id == "-1":
+        await db.carts.insert_one(
+            {"cart_id": uuid.uuid4()},
+            {"items": state["cart"]["items"]}
+        )
+    else:
+        await db.carts.update_one(
+            {"cart_id": cart_id},
+            {"$set": {"items": state["cart"]["items"]}},
+            upsert=True
+        )
     logger.info('Called successfully of persist_cart_tool')
     print('Called successfully of persist_cart_tool')
     return state
@@ -149,20 +163,22 @@ async def cart_reasoning_node(state: CartAgentState) -> CartAgentState:
     CURRENT_CART = {json.dumps(state["cart"])}
     """
 
-    logger.info(f'LLM Call Prompt: {prompt}')
+    logger.info(f'cart_reasoning_node -> LLM Call Prompt: {prompt}')
+    st = time.time()
     response = await asyncio.to_thread(llm.invoke, prompt)
-
     raw_response = response.text()
+    et = time.time()
+
     input_tokens = response.usage_metadata.get("input_tokens")
     output_tokens = response.usage_metadata.get("output_tokens")
     total_tokens = response.usage_metadata.get("total_tokens")
-    logger.info(f'LLM Raw response: {raw_response}')
-    print(f'LLM Raw response: {raw_response}')
+    logger.info(f'cart_reasoning_node -> LLM Raw response: {raw_response}')
+    print(f'cart_reasoning_node -> LLM Raw response: {raw_response}')
 
-    logger.info(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' total_tokens: {total_tokens}')
-    print(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' total_tokens: {total_tokens}')
+    logger.info(f'cart_reasoning_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+                f' total_tokens: {total_tokens}, Took: f{round((et-st), 3)}')
+    print(f'cart_reasoning_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+                f' total_tokens: {total_tokens}, Took: f{round((et-st), 3)}')
 
     try:
         updated = parse_json_response(raw_response)
@@ -173,6 +189,9 @@ async def cart_reasoning_node(state: CartAgentState) -> CartAgentState:
 
     state["result"] = updated
     state["cart"]["items"] = updated["items"]
+    state["total_input_tokens"] += input_tokens
+    state["total_output_tokens"] += output_tokens
+    state["total_llm_calls"] += 1
     return state
 
 
@@ -210,7 +229,14 @@ async def get_cart(cart_id: str):
         out = await cart_graph.ainvoke(state)
         logger.info(f'Request for get_cart processed successfully, cart_id = {cart_id}, result={out.get("cart")}')
         print(f'Request for get_cart processed successfully, cart_id = {cart_id}, result={out.get("cart")}')
-        return Cart(**out["cart"])
+        return Cart(
+            cart_id=out["cart"]["cart_id"],
+            items=out["cart"]["items"],
+            total_input_tokens=out["total_input_tokens"],
+            total_output_tokens=out["total_output_tokens"],
+            total_llm_calls=out["total_llm_calls"]
+        )
+
     except Exception:
         raise HTTPException(status_code=404, detail="cart not found")
 
@@ -231,7 +257,14 @@ async def add_item(cart_id: str, item: CartItem):
         out = await cart_graph.ainvoke(state)
         logger.info(f'Request for add_item processed successfully, cart_id = {cart_id}, result={out.get("cart")}')
         print(f'Request for add_item processed successfully, cart_id = {cart_id}, result={out.get("cart")}')
-        return Cart(**out["cart"])
+        return Cart(
+            cart_id=out["cart"]["cart_id"],
+            items=out["cart"]["items"],
+            total_input_tokens=out["total_input_tokens"],
+            total_output_tokens=out["total_output_tokens"],
+            total_llm_calls=out["total_llm_calls"]
+        )
+
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -244,10 +277,20 @@ async def remove_item(cart_id: str, sku: str):
             "action": "REMOVE_ITEM",
             "item": {"sku": sku},
             "cart": {},
-            "result": {}
+            "result": {},
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_llm_calls": 0,
         }
         out = await cart_graph.ainvoke(state)
-        return Cart(**out["cart"])
+        return Cart(
+            cart_id=out["cart"]["cart_id"],
+            items=out["cart"]["items"],
+            total_input_tokens=out["total_input_tokens"],
+            total_output_tokens=out["total_output_tokens"],
+            total_llm_calls=out["total_llm_calls"]
+        )
+
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

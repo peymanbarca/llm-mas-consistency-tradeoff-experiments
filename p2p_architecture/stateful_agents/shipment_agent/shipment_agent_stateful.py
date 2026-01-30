@@ -384,6 +384,7 @@ async def book_shipment(req: ShipmentRequest, user_id: Optional[str] = Query(Non
             "order_id": req.order_id,
             "address": req.address,
             "tracking_id": tracking_id,
+            "shipment_prefs": out["shipment_prefs"],
             "created_at": datetime.datetime.utcnow()
         }
 

@@ -1,5 +1,7 @@
 import os
 import logging
+import time
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import TypedDict, List, Dict, Any, Optional
@@ -57,11 +59,19 @@ class PriceResponse(BaseModel):
     total_discount: float
     total: float
     currency: Optional[str] = None
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
+
 
 class PricingState(TypedDict):
     request: Dict[str, Any]
     price_map: Dict[str, float]
     result: Dict[str, Any]
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
+
 
 @app.on_event("startup")
 async def startup():
@@ -146,19 +156,21 @@ async def pricing_reasoning(state: PricingState) -> PricingState:
 
     # LangChain Ollama is synchronous → offload
     logger.info(f'LLM Call Prompt: {prompt}')
+    st = time.time()
     response = await asyncio.to_thread(llm.invoke, prompt)
-
     raw_response = response.text()
+    et = time.time()
+
     input_tokens = response.usage_metadata.get("input_tokens")
     output_tokens = response.usage_metadata.get("output_tokens")
     total_tokens = response.usage_metadata.get("total_tokens")
-    logger.info(f'LLM Raw response: {raw_response}')
-    print(f'LLM Raw response: {raw_response}')
+    logger.info(f'pricing_reasoning -> LLM Raw response: {raw_response}')
+    print(f'pricing_reasoning -> LLM Raw response: {raw_response}')
 
-    logger.info(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' total_tokens: {total_tokens}')
-    print(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' total_tokens: {total_tokens}')
+    logger.info(f'pricing_reasoning -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+                f' total_tokens: {total_tokens}, Took: f{round((et-st), 3)}')
+    print(f'pricing_reasoning -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+                f' total_tokens: {total_tokens}, Took: f{round((et-st), 3)}')
 
     try:
         parsed = parse_json_response(raw_response)
@@ -168,6 +180,9 @@ async def pricing_reasoning(state: PricingState) -> PricingState:
         raise ValueError(f"Invalid JSON from pricing agent: {raw_response}") from e
 
     state["result"] = parsed
+    state["total_input_tokens"] += input_tokens
+    state["total_output_tokens"] += output_tokens
+    state["total_llm_calls"] += 1
     return state
 
 
@@ -193,14 +208,25 @@ async def compute_price(req: PriceRequest):
         state = {
             "request": req.dict(),
             "price_map": {},
-            "result": {}
+            "result": {},
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_llm_calls": 0,
         }
         logger.info(f'Request for compute_price, req = {req}, state={state}')
         print(f'Request for compute_price, req = {req}, state={state}')
         out = await pricing_graph.ainvoke(state)
         logger.info(f'Request for compute_price processed successfully, req = {req}, result={out.get("result")}')
         print(f'Request for compute_price processed successfully, req = {req}, result={out.get("result")}')
-        return out["result"]
+
+        return PriceResponse(
+            total_discount=out["result"]["total_discount"],
+            total=out["result"]["total"],
+            total_input_tokens=out["total_input_tokens"],
+            total_output_tokens=out["total_output_tokens"],
+            total_llm_calls=out["total_llm_calls"]
+        )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

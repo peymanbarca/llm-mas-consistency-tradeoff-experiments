@@ -17,7 +17,6 @@ from langgraph.graph import StateGraph, END
 import asyncio
 import requests
 
-
 logger = logging.getLogger("order_agent")
 logging.basicConfig(
     filename='logs/order_agent.log',
@@ -49,9 +48,11 @@ class CartItem(BaseModel):
     sku: str
     qty: int = Field(1, gt=0)
 
+
 class Cart(BaseModel):
     cart_id: str
     items: List[CartItem] = []
+
 
 class PriceResponseItem(BaseModel):
     product_id: str
@@ -60,12 +61,14 @@ class PriceResponseItem(BaseModel):
     line_total: float
     discounts: float
 
+
 class PriceResponse(BaseModel):
     items: List[PriceResponseItem]
     subtotal: float
     total_discount: float
     total: float
     currency: str
+
 
 class OrderCreate(BaseModel):
     cart_id: str
@@ -75,13 +78,18 @@ class OrderCreate(BaseModel):
     delay: float = 0.0
     drop: int = 0
 
+
 class CartCheckoutReq(BaseModel):
     cart_id: str
     shipment_prompt: str
 
+
 class CartCheckoutRes(BaseModel):
     order_id: str
     status: str
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
 
 
 # -------------------- Agent State --------------------------
@@ -90,6 +98,7 @@ class OrderState(TypedDict):
     trace_id: str
     order_id: str
     cart_id: str
+    shipment_prompt: str
 
     items: List[dict]
     final_price: float
@@ -104,6 +113,10 @@ class OrderState(TypedDict):
 
     decision: Optional[str]
     status: Optional[str]
+
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
 
 
 @app.on_event("startup")
@@ -132,7 +145,6 @@ def fetch_cart(cart_id: str):
     return r.json()
 
 
-
 def price_cart(state):
     """Fetch latest prices for cart items"""
     items = state['items']
@@ -144,7 +156,6 @@ def price_cart(state):
     r = requests.post(f"{PRICING_SERVICE_URL}/price", json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
-
 
 
 def reserve_inventory(state):
@@ -161,7 +172,6 @@ def reserve_inventory(state):
     return r.json()
 
 
-
 def rollback_inventory(state):
     """Rollback inventory reservation"""
     payload = {
@@ -171,8 +181,9 @@ def rollback_inventory(state):
         "delay": state['delay'],
         "drop": state['drop']
     }
-    requests.post(INVENTORY_SERVICE_RESERVE_ROLLBACK_URL, json=payload, timeout=10)
-
+    r = requests.post(INVENTORY_SERVICE_RESERVE_ROLLBACK_URL, json=payload, timeout=10)
+    r.raise_for_status()
+    return r.json()
 
 
 def process_payment(state):
@@ -184,11 +195,10 @@ def process_payment(state):
     return r.json()
 
 
-@tool
-def book_shipment(order_id: str):
+def book_shipment(order_id: str, shipment_prompt: str):
     """Book shipment"""
     r = requests.post(SHIPMENT_SERVICE_URL,
-                      json={"order_id": order_id, "address": "SAMPLE_ADDRESS"},
+                      json={"order_id": order_id, "address": "SAMPLE_ADDRESS", "main_query": shipment_prompt},
                       timeout=10)
     r.raise_for_status()
     return r.json()
@@ -208,7 +218,7 @@ def parse_json_response(text: str):
 
 # ----------------- Reasoning None (LLM-Driven) ------
 
-def reason_node(state: OrderState):
+def orchestrate_reason_node(state: OrderState):
     order_reasoning_prompt = f"""
         You are an autonomous order orchestration agent.
 
@@ -245,34 +255,41 @@ def reason_node(state: OrderState):
 
         """
 
-    logger.info(f'LLM Call Prompt: {order_reasoning_prompt}')
+    logger.info(f'orchestrate_reason_node -> LLM Call Prompt: {order_reasoning_prompt}')
+    st = time.time()
     response = llm.invoke(order_reasoning_prompt)
-
     raw_response = response.text()
+    et = time.time()
+
     input_tokens = response.usage_metadata.get("input_tokens")
     output_tokens = response.usage_metadata.get("output_tokens")
     total_tokens = response.usage_metadata.get("total_tokens")
     reasoning_text = response.additional_kwargs.get("reasoning_content", None)
     reasoning_tokens = response.usage_metadata.get("output_token_details", {}).get("reasoning", 0)
 
-    print(f'LLM Reasoning Text: {reasoning_text}')
+    print(f'orchestrate_reason_node -> LLM Reasoning Text: {reasoning_text}')
     logger.info(f'LLM Raw response: {raw_response}')
-    print(f'LLM Raw response: {raw_response}')
+    print(f'orchestrate_reason_node -> LLM Raw response: {raw_response}')
 
-    logger.info(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}')
-    print(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}')
+    logger.info(
+        f'orchestrate_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+        f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
+    print(f'orchestrate_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+          f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
 
     decision = parse_json_response(raw_response)
-    logger.info(f'LLM Parsed response: {decision}')
-    print(f'LLM Parsed response: {decision}')
+    logger.info(f'orchestrate_reason_node -> LLM Parsed response: {decision}')
+    print(f'orchestrate_reason_node -> LLM Parsed response: {decision}')
 
     state["decision"] = decision["next_action"]
+    state["total_input_tokens"] += input_tokens
+    state["total_output_tokens"] += output_tokens
+    state["total_llm_calls"] += 1
     return state
 
 
-# -------------- Action Nodes -----------
+# -------------- Action Nodes (Execution Tools) -----------
+
 def fetch_cart_node(state: OrderState):
     logger.info(f'Calling fetch_cart_node tool ... \n Current State is {state}')
     print(f'Calling fetch_cart_node tool ... \n Current State is {state}')
@@ -281,6 +298,9 @@ def fetch_cart_node(state: OrderState):
     print(f'Response of fetch_cart_node tool ==> {cart}, \n-------------------------------------')
 
     state["items"] = cart["items"]
+    state["total_input_tokens"] += cart["total_input_tokens"]
+    state["total_output_tokens"] += cart["total_output_tokens"]
+    state["total_llm_calls"] += cart["total_llm_calls"]
     return state
 
 
@@ -292,11 +312,15 @@ def pricing_node(state: OrderState):
     print(f'Response of pricing_node tool ==> {pricing}, \n-------------------------------------')
 
     state["final_price"] = pricing["total"]
+    state["total_input_tokens"] += pricing["total_input_tokens"]
+    state["total_output_tokens"] += pricing["total_output_tokens"]
+    state["total_llm_calls"] += pricing["total_llm_calls"]
 
     # init order in DB
-    db.orders.insert_one({"_id": state['order_id'], "items": [{'sku': item['sku'], 'qty': item['qty']} for item in state['items']],
-                           "cart_id": state['cart_id'], "status": "INIT",
-                           "final_price": state['final_price']})
+    db.orders.insert_one(
+        {"_id": state['order_id'], "items": [{'sku': item['sku'], 'qty': item['qty']} for item in state['items']],
+         "cart_id": state['cart_id'], "status": "INIT",
+         "final_price": state['final_price']})
     return state
 
 
@@ -310,6 +334,10 @@ def reserve_inventory_node(state: OrderState):
     state["inventory_status"] = res["status"]
     if res["status"] == "OUT_OF_STOCK":
         state["status"] = "OUT_OF_STOCK"
+
+    state["total_input_tokens"] += res["total_input_tokens"]
+    state["total_output_tokens"] += res["total_output_tokens"]
+    state["total_llm_calls"] += res["total_llm_calls"]
 
     # update order status in DB
     db.orders.update_one({"_id": state['order_id']}, {"$set": {"status": state["inventory_status"]}})
@@ -326,13 +354,18 @@ def payment_node(state: OrderState):
 
         state["payment_status"] = res["status"]
         state["status"] = "PAYMENT_SUCCEED" if res["status"] == "SUCCESS" else "PAYMENT_FAILED"
+        state["total_input_tokens"] += res["total_input_tokens"]
+        state["total_output_tokens"] += res["total_output_tokens"]
+        state["total_llm_calls"] += res["total_llm_calls"]
+
     except Exception as e:
         logger.info(f'Exception in response of payment_node tool ==> {e}, \n-------------------------------------')
         print(f'Exception in response of payment_node tool ==> {e}, \n-------------------------------------')
         state["payment_status"] = "FAILED"
         state["status"] = "PAYMENT_FAILED"
-    # update order status in DB
-    db.orders.update_one({"_id": state['order_id']}, {"$set": {"status": state["status"]}})
+    finally:
+        # update order status in DB
+        db.orders.update_one({"_id": state['order_id']}, {"$set": {"status": state["status"]}})
 
     return state
 
@@ -340,7 +373,10 @@ def payment_node(state: OrderState):
 def rollback_node(state: OrderState):
     logger.info(f'Calling rollback_node tool ... \n Current State is {state}, \n-------------------------------------')
     print(f'Calling rollback_node tool ... \n Current State is {state}, \n-------------------------------------')
-    rollback_inventory(state)
+    res = rollback_inventory(state)
+    state["total_input_tokens"] += res["total_input_tokens"]
+    state["total_output_tokens"] += res["total_output_tokens"]
+    state["total_llm_calls"] += res["total_llm_calls"]
     return state
 
 
@@ -348,12 +384,16 @@ def shipment_node(state: OrderState):
     logger.info(f'Calling shipment_node tool ... \n Current State is {state}')
     print(f'Calling shipment_node tool ... \n Current State is {state}')
     try:
-        res = book_shipment.invoke(state["order_id"])
+        res = book_shipment(order_id=state["order_id"], shipment_prompt=state["shipment_prompt"])
         logger.info(f'Response of shipment_node tool ==> {res}, \n-------------------------------------')
         print(f'Response of shipment_node tool ==> {res}, \n-------------------------------------')
 
         state["shipment_status"] = "BOOKED"
         state["status"] = "COMPLETED"
+        state["total_input_tokens"] += res["total_input_tokens"]
+        state["total_output_tokens"] += res["total_output_tokens"]
+        state["total_llm_calls"] += res["total_llm_calls"]
+
         # update order status in DB
         db.orders.update_one({"_id": state['order_id']}, {"$set": {"status": "COMPLETED"}})
 
@@ -362,6 +402,7 @@ def shipment_node(state: OrderState):
         print(f'Exception in response of shipment_node tool ==> {e}, \n-------------------------------------')
         state["shipment_status"] = "FAILED"
         state["status"] = "SHIPMENT_FAILED"
+
         # update order status in DB
         db.orders.update_one({"_id": state['order_id']}, {"$set": {"status": "SHIPMENT_FAILED"}})
 
@@ -372,7 +413,7 @@ def shipment_node(state: OrderState):
 
 graph = StateGraph(OrderState)
 
-graph.add_node("reason", reason_node)
+graph.add_node("reason", orchestrate_reason_node)
 graph.add_node("fetch_cart", fetch_cart_node)
 graph.add_node("price", pricing_node)
 graph.add_node("reserve", reserve_inventory_node)
@@ -408,6 +449,7 @@ def checkout_cart_agent(cart_id: str, shipment_prompt: str):
         "trace_id": str(uuid.uuid4()),
         "order_id": str(uuid.uuid4()),
         "cart_id": cart_id,
+        "shipment_prompt": shipment_prompt,
 
         "items": [],
         "final_price": 0.0,
@@ -415,6 +457,10 @@ def checkout_cart_agent(cart_id: str, shipment_prompt: str):
         "atomic_update": False,
         "delay": 0.0,
         "drop": 0,
+
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_llm_calls": 0,
 
         "inventory_status": None,
         "payment_status": None,
@@ -431,7 +477,10 @@ def checkout_cart_agent(cart_id: str, shipment_prompt: str):
 
     return {
         "order_id": final_state["order_id"],
-        "status": final_state["status"]
+        "status": final_state["status"],
+        "total_input_tokens": final_state["total_input_tokens"],
+        "total_output_tokens": final_state["total_output_tokens"],
+        "total_llm_calls": final_state["total_llm_calls"]
     }
 
 

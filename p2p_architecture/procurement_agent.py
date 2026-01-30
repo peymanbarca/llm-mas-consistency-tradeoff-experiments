@@ -40,12 +40,18 @@ class SupplierOrderResponse(BaseModel):
     supplier_order_id: str
     status: str
     eta_days: Optional[int]
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
 
 
 class ProcurementState(TypedDict):
     request: Dict[str, Any]
     supplier_result: Dict[str, Any]
     result: Dict[str, Any]
+    total_input_tokens: int
+    total_output_tokens: int
+    total_llm_calls: int
 
 
 @app.on_event("startup")
@@ -121,19 +127,22 @@ async def procurement_reasoning(state: ProcurementState) -> ProcurementState:
     """
 
     # LangChain Ollama is synchronous → offload
+    logger.info(f'LLM Call Prompt: {prompt}')
+    st = time.time()
     response = await asyncio.to_thread(llm.invoke, prompt)
-
     raw_response = response.text()
+    et = time.time()
+
     input_tokens = response.usage_metadata.get("input_tokens")
     output_tokens = response.usage_metadata.get("output_tokens")
     total_tokens = response.usage_metadata.get("total_tokens")
-    logger.info(f'LLM Raw response: {raw_response}')
-    print(f'LLM Raw response: {raw_response}')
+    logger.info(f'procurement_reasoning -> LLM Raw response: {raw_response}')
+    print(f'procurement_reasoning -> LLM Raw response: {raw_response}')
 
-    logger.info(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' total_tokens: {total_tokens}')
-    print(f'LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
-                f' total_tokens: {total_tokens}')
+    logger.info(f'procurement_reasoning -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+                f' total_tokens: {total_tokens}, Took: f{round((et-st), 3)}')
+    print(f'procurement_reasoning -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+                f' total_tokens: {total_tokens}, Took: f{round((et-st), 3)}')
 
     try:
         parsed = parse_json_response(raw_response)
@@ -141,6 +150,9 @@ async def procurement_reasoning(state: ProcurementState) -> ProcurementState:
         raise ValueError(f"Invalid JSON from procurement agent: {raw_response}") from e
 
     state["result"] = parsed
+    state["total_input_tokens"] += input_tokens
+    state["total_output_tokens"] += output_tokens
+    state["total_llm_calls"] += 1
     return state
 
 
@@ -166,7 +178,10 @@ async def order_from_supplier(req: SupplierOrderRequest):
         state = {
             "request": req.dict(),
             "supplier_result": {},
-            "result": {}
+            "result": {},
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_llm_calls": 0,
         }
 
         out = await procurement_graph.ainvoke(state)
@@ -182,7 +197,15 @@ async def order_from_supplier(req: SupplierOrderRequest):
 
         await db.proc_orders.insert_one(doc)
 
-        return SupplierOrderResponse(**out["result"])
+        # return SupplierOrderResponse(**out["result"])
+        return SupplierOrderResponse(
+            supplier_order_id=out["result"]["supplier_order_id"],
+            status=out["result"]["status"],
+            eta_days=out["result"]["eta_days"],
+            total_input_tokens=out["total_input_tokens"],
+            total_output_tokens=out["total_output_tokens"],
+            total_llm_calls=out["total_llm_calls"]
+        )
 
     except Exception as e:
         # failed procurement is persisted for auditability
