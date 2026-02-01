@@ -44,7 +44,7 @@ class PriceRequest(BaseModel):
     items: List[PriceRequestItem]
     promo_codes: Optional[List[str]] = None
     currency: Optional[str] = "USD"
-    only_final_price: bool = False
+
 
 class PriceResponseItem(BaseModel):
     product_id: str
@@ -244,3 +244,60 @@ async def get_price(product_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="price not found")
     return PriceItem(product_id=doc["product_id"], price=doc["price"])
+
+
+@app.post("/item-price", response_model=PriceResponse)
+async def compute_prices_for_items(req: PriceRequest):
+    logger.info(f"Request for compute_price, request: {req}")
+
+    # Fetch unit prices from DB in bulk
+    product_ids = [it.product_id for it in req.items]
+    docs = await db.prices.find({"product_id": {"$in": product_ids}}).to_list(length=len(product_ids))
+    price_map = {d["product_id"]: d["price"] for d in docs}
+
+    subtotal = 0.0
+    total_discount = 0.0
+    items_out = []
+    promos = req.promo_codes or []
+
+    # Simple promo store (in DB could be separate)
+    promos_map = {
+        "PROMO10": {"type": "percentage", "value": 10.0, "min_qty": 1},
+        "BUYS2SAVE5": {"type": "fixed", "value": 5.0, "min_qty": 2}
+    }
+
+    for it in req.items:
+        unit = price_map.get(it.product_id)
+        if unit is None:
+            logger.error(f"Request for compute_price failed, status: 404, detail: product {it.product_id} not found,"
+                         f" request: {req}")
+            raise HTTPException(status_code=404, detail=f"product {it.product_id} not found")
+        line = unit * it.qty
+        discount = 0.0
+        for code in promos:
+            promo = promos_map.get(code)
+            if not promo:
+                continue
+            if it.qty >= promo["min_qty"]:
+                if promo["type"] == "percentage":
+                    discount += line * (promo["value"] / 100.0)
+                else:
+                    discount += promo["value"]
+        items_out.append(PriceResponseItem(
+            product_id=it.product_id, qty=it.qty,
+            unit_price=unit, line_total=round(line - discount, 2),
+            discounts=round(discount, 2)
+        ))
+        subtotal += line
+        total_discount += discount
+
+    total = max(0.0, subtotal - total_discount)
+    result = PriceResponse(items=items_out, subtotal=round(subtotal, 2),
+                           total_discount=round(total_discount, 2),
+                           total=round(total, 2), currency=req.currency,
+                           total_input_tokens=0, total_output_tokens=0,
+                           total_llm_calls=0)
+
+    logger.info(f"Request for compute_price successfully processed, result: {result}, request: {req}")
+
+    return result

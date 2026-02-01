@@ -316,3 +316,6 @@ async def remove_item(cart_id: str, sku: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/clear_carts")
+async def clear_carts():
+    await db.carts.delete_many({})

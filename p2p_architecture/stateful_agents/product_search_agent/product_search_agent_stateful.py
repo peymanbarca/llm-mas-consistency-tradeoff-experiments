@@ -101,11 +101,13 @@ async def shutdown():
 
 async def load_user_memory(user_id: str) -> Optional[str]:
     doc = await db.user_memory.find_one({"user_id": user_id, "type": "search_preferences"})
+    logger.info(f"memory loaded for user_id = {user_id} as {doc}")
     return doc["summary"] if doc else None
 
 
 async def delete_user_memory(user_id: str):
     await db.user_memory.delete_many({"user_id": user_id, "type": "search_preferences"})
+    logger.info(f"memory deleted for user_id = {user_id}")
 
 
 async def save_user_memory(user_id: str, summary: str):
@@ -114,6 +116,8 @@ async def save_user_memory(user_id: str, summary: str):
         {"$set": {"summary": summary, "type": "search_preferences", "updated_at": datetime.datetime.utcnow()}},
         upsert=True
     )
+    doc = await db.user_memory.find_one({"user_id": user_id, "type": "search_preferences"})
+    logger.info(f"memory updated for user_id = {user_id} as {doc}")
 
 
 async def load_memory_node(
@@ -121,11 +125,15 @@ async def load_memory_node(
 ) -> ProductSearchAgentState:
     user_id = state.get("user_id")
     if not user_id:
+        logger.info("user_id not provided, previous_memory_summary set as null")
         state["previous_memory_summary"] = None
         return state
 
     summary = await load_user_memory(user_id)
     state["previous_memory_summary"] = summary
+    if summary is None:
+        logger.info(f"user_id={user_id}, previous_memory_summary set as null")
+
     return state
 
 
@@ -141,7 +149,7 @@ async def infer_search_query(state: ProductSearchAgentState) -> ProductSearchAge
 
     Task:
     - Infer the search preferences from user raw query for parts only related to product name / description and pricing filter
-    - Respect user preference summary if provided
+    - Respect user preference summary if provided to adjust product name / description and pricing filter based on it
     - Return only a JSON with below schema without intermediate reasoning and analysis text:
 
     Schema:
@@ -209,7 +217,8 @@ async def update_memory_node(
         You are a memory summarization agent.
 
         Tasks:
-        - Update the existing summary concisely about search preferences of user with new interaction
+        - Update the existing summary concisely about search preferences of user with new interaction, by considering
+            product name / description and pricing filter
         - Return only text of updated summary without any additional prefix or suffix
 
         Existing summary:
@@ -282,7 +291,7 @@ async def fetch_prices_tool(state: ProductSearchAgentState) -> ProductSearchAgen
     }
 
     async with httpx.AsyncClient() as client:
-        r = await client.post(f"{PRICING_SERVICE_URL}/price", json=payload, timeout=10)
+        r = await client.post(f"{PRICING_SERVICE_URL}/item-price", json=payload, timeout=10)
         r.raise_for_status()
         jr = r.json()
 
@@ -384,7 +393,7 @@ async def search_products(q: str = Query(...), user_id: Optional[str] = Query(No
         "results": []
     }
 
-    logger.info(f"Input request prompt {q}")
+    logger.info(f"***************************************\nInput request prompt {q}, user_id: {user_id}")
 
     try:
         out = await search_graph.ainvoke(state)
