@@ -28,12 +28,12 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB = os.getenv("MONGO_DB", "ms_baseline")
 PORT = int(os.getenv("PORT", 8000))
 
-INVENTORY_SERVICE_RESERVE_URL = "http://127.0.0.1:8001/reserve"
-INVENTORY_SERVICE_RESERVE_ROLLBACK_URL = "http://127.0.0.1:8001/reserve-rollback"
-CART_SERVICE_URL = "http://127.0.0.1:8003/cart/"
+INVENTORY_AGENT_RESERVE_URL = "http://127.0.0.1:8001/reserve"
+INVENTORY_AGENT_RESERVE_ROLLBACK_URL = "http://127.0.0.1:8001/reserve-rollback"
+CART_AGENT_URL = "http://127.0.0.1:8003/cart/"
 PRICING_SERVICE_URL = "http://127.0.0.1:8002"
-PAYMENT_SERVICE_URL = "http://127.0.0.1:8007/pay-order"
-SHIPMENT_SERVICE_URL = "http://127.0.0.1:8006/book"
+PAYMENT_AGENT_URL = "http://127.0.0.1:8007/pay-order"
+SHIPMENT_AGENT_URL = "http://127.0.0.1:8006/book"
 
 llm = ChatOllama(model="llama3", temperature=0.5, reasoning=False)
 
@@ -143,7 +143,7 @@ async def shutdown():
 @tool
 def fetch_cart(cart_id: str):
     """Fetch shopping cart items"""
-    r = requests.get(CART_SERVICE_URL + cart_id, timeout=10)
+    r = requests.get(CART_AGENT_URL + cart_id, timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -156,7 +156,7 @@ def price_cart(state):
         "promo_codes": [],
         "only_final_price": True
     }
-    r = requests.post(f"{PRICING_SERVICE_URL}/price", json=payload, timeout=10)
+    r = requests.post(f"{PRICING_SERVICE_URL}/item-price", json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -170,7 +170,7 @@ def reserve_inventory(state):
         "delay": state['delay'],
         "drop": state['drop']
     }
-    r = requests.post(INVENTORY_SERVICE_RESERVE_URL, json=payload, timeout=10)
+    r = requests.post(INVENTORY_AGENT_RESERVE_URL, json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -184,14 +184,14 @@ def rollback_inventory(state):
         "delay": state['delay'],
         "drop": state['drop']
     }
-    r = requests.post(INVENTORY_SERVICE_RESERVE_ROLLBACK_URL, json=payload, timeout=10)
+    r = requests.post(INVENTORY_AGENT_RESERVE_ROLLBACK_URL, json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
 
 
 def process_payment(state):
     """Process payment"""
-    r = requests.post(PAYMENT_SERVICE_URL,
+    r = requests.post(PAYMENT_AGENT_URL,
                       json={"order_id": state['order_id'], "final_price": state['final_price']},
                       timeout=10)
     r.raise_for_status()
@@ -200,7 +200,7 @@ def process_payment(state):
 
 def book_shipment(order_id: str, shipment_prompt: str, user_id: Optional[str]):
     """Book shipment"""
-    r = requests.post(SHIPMENT_SERVICE_URL + f"?user_id={user_id}" if user_id else SHIPMENT_SERVICE_URL,
+    r = requests.post(SHIPMENT_AGENT_URL + f"?user_id={user_id}" if user_id else SHIPMENT_AGENT_URL,
                       json={"order_id": order_id, "address": "SAMPLE_ADDRESS", "main_query": shipment_prompt},
                       timeout=10)
     r.raise_for_status()
@@ -313,6 +313,7 @@ def fetch_cart_node(state: OrderState):
     return state
 
 
+# call pricing service API as tool
 def pricing_node(state: OrderState):
     logger.info(f'Calling pricing_node tool ... \n Current State is {state}')
     print(f'Calling pricing_node tool ... \n Current State is {state}')
