@@ -1,0 +1,88 @@
+2026-02-04 17:09:43,096 - INFO - Connected to MongoDB at mongodb://localhost:27017/ db=ms_baseline
+2026-02-04 17:10:18,943 - INFO - MongoDB connection closed
+2026-02-04 17:30:38,583 - INFO - Connected to MongoDB at mongodb://localhost:27017/ db=ms_baseline
+2026-02-04 17:31:05,030 - INFO - Request for search_add_to_cart, search_prompt = string, state={'trace_id': '757d143b-15d3-4b43-93ce-a62296e3a51d', 'order_id': None, 'cart_id': None, 'search_prompt': 'string', 'user_id': '1', 'items': [], 'final_price': 0.0, 'atomic_update': False, 'delay': 0.0, 'drop': 0, 'total_input_tokens': 0, 'total_output_tokens': 0, 'total_llm_calls': 0, 'inventory_status': None, 'payment_status': None, 'shipment_status': None, 'decision': None, 'status': None, 'order_status': None}
+2026-02-04 17:31:05,033 - INFO - orchestrate_reason_node -> LLM Call Prompt: 
+        You are an autonomous planner agent that should orchestrate the workflow of retail supply chain.
+
+        Tasks:
+        - Your goal is to complete the workflow from product search, to finalizing shopping cart and purchase it.
+        - You must decide the next_action as output based on PREVIOUS_ACTION and CURRENT_STATUS input
+        - Return ONLY a JSON response not python code
+
+        - Do not return middle steps and thinking procedure in response
+        - Return the next action as valid json in this schema: {"next_action": string}
+
+        Possible actions:
+        - FETCH_CART
+        - PRICE_CART
+        - RESERVE_INVENTORY
+        - PROCESS_PAYMENT
+        - ROLLBACK_INVENTORY
+        - BOOK_SHIPMENT
+        - FINISH
+
+        Rules:
+        - If PREVIOUS_ACTION is empty, choose the next_action as FETCH_CART
+        - Else, choose the next_action from this workflow for the input PREVIOUS_ACTION:
+            FETCH_CART -> PRICE_CART
+            PRICE_CART -> RESERVE_INVENTORY
+            RESERVE_INVENTORY  -> PROCESS_PAYMENT
+            PROCESS_PAYMENT -> BOOK_SHIPMENT
+            BOOK_SHIPMENT -> FINISH
+        - Never choose next_action same as PREVIOUS_ACTION
+
+        Rule Exceptions:
+        - If CURRENT_STATUS is OUT_OF_STOCK choose next action as FINISH
+        - If CURRENT_STATUS is PAYMENT_FAILED choose next action a ROLLBACK_INVENTORY
+        - If CURRENT_STATUS is ROLLBACK_INVENTORY, choose next action as FINISH
+        - Never skip any steps
+
+        Input:
+        PREVIOUS_ACTION: None
+        CURRENT_STATUS: None
+
+        
+2026-02-04 17:31:14,551 - INFO - Request for checkout_cart, cart_id = string, state={'trace_id': 'b5c011a6-e7fc-4135-a8c1-81f46cec97c3', 'order_id': None, 'cart_id': 'string', 'shipment_prompt': 'string', 'user_id': '1', 'items': [], 'final_price': 0.0, 'atomic_update': False, 'delay': 0.0, 'drop': 0, 'total_input_tokens': 0, 'total_output_tokens': 0, 'total_llm_calls': 0, 'inventory_status': None, 'payment_status': None, 'shipment_status': None, 'decision': None, 'status': None, 'order_status': None}
+2026-02-04 17:31:14,553 - INFO - orchestrate_reason_node -> LLM Call Prompt: 
+        You are an autonomous planner agent that should orchestrate the workflow of retail supply chain.
+
+        Tasks:
+        - Your goal is to complete the workflow from product search, to finalizing shopping cart and purchase it.
+        - You must decide the next_action as output based on PREVIOUS_ACTION and CURRENT_STATUS input
+        - Return ONLY a JSON response not python code
+
+        - Do not return middle steps and thinking procedure in response
+        - Return the next action as valid json in this schema: {"next_action": string}
+
+        Possible actions:
+        - FETCH_CART
+        - PRICE_CART
+        - RESERVE_INVENTORY
+        - PROCESS_PAYMENT
+        - ROLLBACK_INVENTORY
+        - BOOK_SHIPMENT
+        - FINISH
+
+        Rules:
+        - If PREVIOUS_ACTION is empty, choose the next_action as FETCH_CART
+        - Else, choose the next_action from this workflow for the input PREVIOUS_ACTION:
+            FETCH_CART -> PRICE_CART
+            PRICE_CART -> RESERVE_INVENTORY
+            RESERVE_INVENTORY  -> PROCESS_PAYMENT
+            PROCESS_PAYMENT -> BOOK_SHIPMENT
+            BOOK_SHIPMENT -> FINISH
+        - Never choose next_action same as PREVIOUS_ACTION
+
+        Rule Exceptions:
+        - If CURRENT_STATUS is OUT_OF_STOCK choose next action as FINISH
+        - If CURRENT_STATUS is PAYMENT_FAILED choose next action a ROLLBACK_INVENTORY
+        - If CURRENT_STATUS is ROLLBACK_INVENTORY, choose next action as FINISH
+        - Never skip any steps
+
+        Input:
+        PREVIOUS_ACTION: None
+        CURRENT_STATUS: None
+
+        
+2026-02-04 17:32:09,735 - INFO - MongoDB connection closed
