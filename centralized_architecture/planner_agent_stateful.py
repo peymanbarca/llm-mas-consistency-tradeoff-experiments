@@ -4,11 +4,11 @@ import time
 import uuid
 import datetime
 import httpx
-
+import sys
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import TypedDict, List, Dict, Any, Optional, Literal
-from motor import MotorClient
+from pymongo import MongoClient
 from httpx import AsyncClient
 import json
 from langchain_ollama import ChatOllama
@@ -37,12 +37,12 @@ PRICING_SERVICE_URL = "http://127.0.0.1:8002"
 PAYMENT_AGENT_URL = "http://127.0.0.1:8007/pay-order"
 SHIPMENT_AGENT_URL = "http://127.0.0.1:8006/book"
 
-llm = ChatOllama(model="llama3", temperature=0.5, reasoning=False)
+llm = ChatOllama(model="llama3", temperature=0.3, reasoning=False)
 
 app = FastAPI(title="Planner Agent")
 
 # DB client will be set on startup
-db_client: Optional[MotorClient] = None
+db_client: Optional[MongoClient] = None
 db = None
 
 
@@ -234,7 +234,7 @@ class PlannerState(TypedDict):
 @app.on_event("startup")
 async def startup():
     global db_client, db
-    db_client = MotorClient(MONGO_URI)
+    db_client = MongoClient(MONGO_URI)
     db = db_client[MONGO_DB]
     logger.info("Connected to MongoDB at %s db=%s", MONGO_URI, MONGO_DB)
 
@@ -249,44 +249,44 @@ async def shutdown():
 
 # ------------------------- Memory helpers ---------------
 
-async def load_user_memory(user_id: str, type: str) -> Optional[str]:
+def load_user_memory(user_id: str, type: str) -> Optional[str]:
 
     # type = shipment_preferences / search_preferences
 
-    doc = await db.user_memory.find_one({"user_id": user_id, "type": type})
+    doc = db.user_memory.find_one({"user_id": user_id, "type": type})
     return doc["summary"] if doc else None
 
 
-async def delete_user_memory(user_id: str, type: str):
-    await db.user_memory.delete_many({"user_id": user_id, "type": type})
+def delete_user_memory(user_id: str, type: str):
+    db.user_memory.delete_many({"user_id": user_id, "type": type})
 
 
-async def save_user_memory(user_id: str, summary: str, type: str):
-    await db.user_memory.update_one(
+def save_user_memory(user_id: str, summary: str, type: str):
+    db.user_memory.update_one(
         {"user_id": user_id},
         {"$set": {"summary": summary, "type": type, "updated_at": datetime.datetime.utcnow()}},
         upsert=True
     )
 
 
-async def load_search_memory_node(state: PlannerState) -> PlannerState:
+def load_search_memory_node(state: PlannerState) -> PlannerState:
     user_id = state.get("user_id")
     if not user_id:
         state["previous_search_memory_summary"] = None
         return state
 
-    summary = await load_user_memory(user_id, "search_preferences")
+    summary = load_user_memory(user_id, "search_preferences")
     state["previous_search_memory_summary"] = summary
     return state
 
 
-async def load_shipment_memory_node(state: PlannerState) -> PlannerState:
+def load_shipment_memory_node(state: PlannerState) -> PlannerState:
     user_id = state.get("user_id")
     if not user_id:
         state["previous_shipment_memory_summary"] = None
         return state
 
-    summary = await load_user_memory(user_id, "shipment_preferences")
+    summary = load_user_memory(user_id, "shipment_preferences")
     state["previous_shipment_memory_summary"] = summary
     return state
 
@@ -430,7 +430,7 @@ def parse_json_response(text: str):
 
 # ----------------- Reasoning Nones (LLM-Driven) ------
 
-async def infer_search_query(state: PlannerState) -> PlannerState:
+def infer_search_query_node(state: PlannerState) -> PlannerState:
     memory_block = (
         f"User preference summary:\n{state['previous_search_memory_summary']}\n\n"
         if state.get("previous_search_memory_summary")
@@ -462,7 +462,7 @@ async def infer_search_query(state: PlannerState) -> PlannerState:
     logger.info(f'infer_search_query -> LLM Call Prompt: {prompt}')
 
     st = time.time()
-    response = await asyncio.to_thread(llm.invoke, prompt)
+    response = llm.invoke(prompt)
     raw_response = response.text()
     et = time.time()
 
@@ -490,7 +490,7 @@ async def infer_search_query(state: PlannerState) -> PlannerState:
     return state
 
 
-async def infer_shipment_params(state: PlannerState) -> PlannerState:
+def infer_shipment_params_node(state: PlannerState) -> PlannerState:
     memory_block = (
         f"User shipment preference summary:\n{state['previous_shipment_memory_summary']}\n\n"
         if state.get("previous_shipment_memory_summary")
@@ -529,7 +529,7 @@ async def infer_shipment_params(state: PlannerState) -> PlannerState:
     logger.info(f'infer_shipment_params_node -> LLM Call Prompt: {prompt}')
 
     st = time.time()
-    response = await asyncio.to_thread(llm.invoke, prompt)
+    response = llm.invoke(prompt)
     raw = response.text()
     et = time.time()
 
@@ -556,7 +556,7 @@ async def infer_shipment_params(state: PlannerState) -> PlannerState:
     return state
 
 
-async def update_search_memory_node(
+def update_search_memory_node(
         state: PlannerState) -> PlannerState:
     user_id = state.get("user_id")
     if not user_id:
@@ -591,7 +591,7 @@ async def update_search_memory_node(
     logger.info(f'update_search_memory_node -> LLM Call Prompt: {prompt}')
 
     st = time.time()
-    response = await asyncio.to_thread(llm.invoke, prompt)
+    response = llm.invoke(prompt)
     new_summary = response.text().strip()
     et = time.time()
 
@@ -610,11 +610,11 @@ async def update_search_memory_node(
     state["total_input_tokens"] += input_tokens
     state["total_output_tokens"] += output_tokens
     state["total_llm_calls"] += 1
-    await save_user_memory(user_id, new_summary, type="search_preferences")
+    save_user_memory(user_id, new_summary, type="search_preferences")
     return state
 
 
-async def update_shipment_memory_node(
+def update_shipment_memory_node(
         state: PlannerState) -> PlannerState:
     user_id = state.get("user_id")
     if not user_id:
@@ -643,7 +643,7 @@ async def update_shipment_memory_node(
     logger.info(f'update_shipment_memory_node -> LLM Call Prompt: {prompt}')
 
     st = time.time()
-    response = await asyncio.to_thread(llm.invoke, prompt)
+    response = llm.invoke(prompt)
     new_summary = response.text().strip()
     et = time.time()
 
@@ -662,51 +662,70 @@ async def update_shipment_memory_node(
     state["total_input_tokens"] += input_tokens
     state["total_output_tokens"] += output_tokens
     state["total_llm_calls"] += 1
-    await save_user_memory(user_id, new_summary, type="shipment_preferences")
+    save_user_memory(user_id, new_summary, type="shipment_preferences")
     return state
 
 
 def orchestration_reason_node(state: PlannerState):
+
     orchestration_reasoning_prompt = f"""
         You are an autonomous planner agent that should orchestrate the workflow of retail supply chain.
 
         Tasks:
         - Your goal is to complete the workflow from product search, to finalizing shopping cart and purchase it.
-        - You must decide the next_action as output based on PREVIOUS_ACTION and CURRENT_STATUS input
+        - You must decide the next_action as output based on PREVIOUS_ACTION, CART_ID, and CURRENT_STATUS input
         - Return ONLY a JSON response not python code
 
         - Do not return middle steps and thinking procedure in response
         - Return the next action as valid json in this schema: {{"next_action": string}}
 
-        Possible actions:
-        - FETCH_CART
-        - PRICE_CART
-        - RESERVE_INVENTORY
-        - PROCESS_PAYMENT
-        - ROLLBACK_INVENTORY
-        - BOOK_SHIPMENT
-        - FINISH
-
-        Rules:
-        - If PREVIOUS_ACTION is empty, choose the next_action as FETCH_CART
-        - Else, choose the next_action from this workflow for the input PREVIOUS_ACTION:
-            FETCH_CART -> PRICE_CART
-            PRICE_CART -> RESERVE_INVENTORY
-            RESERVE_INVENTORY  -> PROCESS_PAYMENT
-            PROCESS_PAYMENT -> BOOK_SHIPMENT
-            BOOK_SHIPMENT -> FINISH
-        - Never choose next_action same as PREVIOUS_ACTION
-
-        Rule Exceptions:
-        - If CURRENT_STATUS is OUT_OF_STOCK choose next action as FINISH
-        - If CURRENT_STATUS is PAYMENT_FAILED choose next action a ROLLBACK_INVENTORY
-        - If CURRENT_STATUS is ROLLBACK_INVENTORY, choose next action as FINISH
-        - Never skip any steps
 
         Input:
         PREVIOUS_ACTION: {state['decision']}
+        CART_ID: {state['cart_id']}
         CURRENT_STATUS: {state['status']}
 
+         Step A: Determine PHASE
+         
+        - If CURRENT_STATUS is OUT_OF_STOCK or PAYMENT_FAILED or ROLLBACK_INVENTORY -> phase = "EXCEPTION"
+        - Else if PREVIOUS_ACTION is null -> phase = "START"
+        - Else -> phase = "IN_PROGRESS"
+        
+        Step B: Choose next_action
+        
+        If phase = "START":
+            If CART_ID is null -> next_action = "INFER_SEARCH"
+            Else -> next_action = "FETCH_CART"
+        
+        If phase = "IN_PROGRESS":
+            Use ONLY this mapping:
+                INFER_SEARCH -> SEARCH
+                SEARCH -> ADD_TO_CART
+                ADD_TO_CART -> FINISH
+                FETCH_CART -> PRICE_CART
+                PRICE_CART -> INIT_ORDER
+                INIT_ORDER -> RESERVE_INVENTORY
+                RESERVE_INVENTORY -> PROCESS_PAYMENT
+                PROCESS_PAYMENT -> INFER_SHIPMENT
+                INFER_SHIPMENT -> BOOK_SHIPMENT
+                BOOK_SHIPMENT -> ORDER_UPDATE
+                ORDER_UPDATE -> FINISH
+        
+        If phase = "EXCEPTION":
+            - If CURRENT_STATUS is OUT_OF_STOCK -> next_action = "ORDER_UPDATE"
+            - If CURRENT_STATUS is PAYMENT_FAILED -> next_action = "ROLLBACK_INVENTORY"
+            - If CURRENT_STATUS is ROLLBACK_INVENTORY -> next_action = "ORDER_UPDATE"
+        
+        Hard constraints:
+        - If PREVIOUS_ACTION is NOT null, you MUST NOT output "INFER_SEARCH".
+        - You MUST NOT output the same action as PREVIOUS_ACTION.
+        
+        Output ONLY valid JSON:
+        {{
+          "phase": "...",
+          "next_action": "..."
+        }}
+        
         """
 
     logger.info(f'orchestrate_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
@@ -749,7 +768,7 @@ def product_search_node(state: PlannerState):
     print(f'Calling product_search_node tool ... \n Current State is {state}')
     try:
         res = search_products(search_prefs=state["search_filters"], user_id=state["user_id"],
-                              previous_memory_summary=state["previous_search_memory_summary"])
+                              previous_memory_summary=state.get("previous_search_memory_summary", None))
         logger.info(f'Response of product_search_node tool ==> {res}, \n-------------------------------------')
         print(f'Response of product_search_node tool ==> {res}, \n-------------------------------------')
 
@@ -781,8 +800,8 @@ def add_to_cart_node(state: PlannerState):
         state["total_llm_calls"] += cart["total_llm_calls"]
         return state
     else:
-        logger.info(f'Could not find any product and not cart is created, \n-------------------------------------')
-        print(f'Could not find any product and not cart is created, \n-------------------------------------')
+        logger.info('Could not find any product and not cart is created, \n-------------------------------------')
+        print('Could not find any product and not cart is created, \n-------------------------------------')
         return state
 
 
@@ -905,7 +924,7 @@ def shipment_node(state: PlannerState):
     print(f'Calling shipment_node tool ... \n Current State is {state}')
     try:
         res = book_shipment(order_id=state["order_id"], shipment_prefs=state["shipment_prefs"],
-                            user_id=state["user_id"], previous_memory_summary=state["previous_shipment_memory_summary"])
+                            user_id=state["user_id"], previous_memory_summary=state.get("previous_shipment_memory_summary", None))
         logger.info(f'Response of shipment_node tool ==> {res}, \n-------------------------------------')
         print(f'Response of shipment_node tool ==> {res}, \n-------------------------------------')
 
@@ -937,6 +956,7 @@ graph = StateGraph(state_schema=PlannerState)
 
 # phase 1
 graph.add_node("reason", orchestration_reason_node)
+graph.add_node("infer_search", infer_search_query_node)
 graph.add_node("product_search", product_search_node)
 graph.add_node("add_to_cart", add_to_cart_node)
 
@@ -947,6 +967,7 @@ graph.add_node("init_order", initialize_order)
 graph.add_node("reserve", reserve_inventory_node)
 graph.add_node("pay", payment_node)
 graph.add_node("rollback", rollback_node)
+graph.add_node("infer_shipment", infer_shipment_params_node)
 graph.add_node("ship", shipment_node)
 graph.add_node("order_update", update_order_status_node)
 
@@ -956,6 +977,7 @@ graph.add_conditional_edges(
     "reason",
     lambda s: s["decision"],
     {
+        "INFER_SEARCH": "infer_search",
         "SEARCH": "product_search",
         "FETCH_CART": "fetch_cart",
         "ADD_TO_CART": "add_to_cart",
@@ -964,6 +986,7 @@ graph.add_conditional_edges(
         "RESERVE_INVENTORY": "reserve",
         "PROCESS_PAYMENT": "pay",
         "ROLLBACK_INVENTORY": "rollback",
+        "INFER_SHIPMENT": "infer_shipment",
         "BOOK_SHIPMENT": "ship",
         "ORDER_UPDATE": "order_update",
         "FINISH": END
@@ -971,8 +994,8 @@ graph.add_conditional_edges(
 )
 
 # loop back to reasoning at each step
-for n in ["product_search", "add_to_cart",
-          "fetch_cart", "price", "init_order", "reserve", "pay", "rollback", "ship", "order_update"]:
+for n in ["infer_search", "product_search", "add_to_cart",
+          "fetch_cart", "price", "init_order", "reserve", "pay", "rollback", "infer_shipment", "ship", "order_update"]:
     graph.add_edge(n, "reason")
 
 planner_agent = graph.compile()
@@ -1007,22 +1030,29 @@ def run_search_add_to_cart_procedure(search_prompt: str, user_id: Optional[str])
         "order_status": None
     }
 
-    logger.info(f'Request for search_add_to_cart, search_prompt = {search_prompt}, state={state}')
-    print(f'Request for search_add_to_cart, search_prompt = {search_prompt}, state={state}')
+    try:
+        logger.info(f'Request for search_add_to_cart, search_prompt = {search_prompt}, state={state}')
+        print(f'Request for search_add_to_cart, search_prompt = {search_prompt}, state={state}')
 
-    final_state = planner_agent.invoke(state, config={"recursion_limit": 14})
+        final_state = planner_agent.invoke(state, config={"recursion_limit": 14})
 
-    return {
-        "query": search_prompt,
-        "previous_search_memory": final_state["previous_search_memory"],
-        "current_search_memory": final_state["current_search_memory"],
-        "total_input_tokens": final_state["total_input_tokens"],
-        "total_output_tokens": final_state["total_output_tokens"],
-        "total_llm_calls": final_state["total_llm_calls"],
-        "search_filters": final_state["search_filters"],
-        "results": final_state["search_results"],
-        "cart_id": final_state["cart_id"]
-    }
+        return {
+            "query": search_prompt,
+            "previous_search_memory": final_state["previous_search_memory"],
+            "current_search_memory": final_state["current_search_memory"],
+            "total_input_tokens": final_state["total_input_tokens"],
+            "total_output_tokens": final_state["total_output_tokens"],
+            "total_llm_calls": final_state["total_llm_calls"],
+            "search_filters": final_state["search_filters"],
+            "results": final_state["search_results"],
+            "cart_id": final_state["cart_id"]
+        }
+    except Exception as e:
+        print(e)
+        logger.exception(e)
+        exc_type, exc_obj, tb = sys.exc_info()
+        line_number = tb.tb_lineno
+        print(f"Error on line {line_number}: {type(e).__name__}, {e}")
 
 
 @app.post("/cart/add", response_model=ProductSearchFinalRes, summary="Search Products & Add to Shopping Cart")
