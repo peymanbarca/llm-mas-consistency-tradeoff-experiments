@@ -28,7 +28,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB = os.getenv("MONGO_DB", "ms_baseline")
 PORT = int(os.getenv("PORT", 8000))
 
-llm = ChatOllama(model="llama3", temperature=0.0, reasoning=False)
+llm = ChatOllama(model="gpt-oss", temperature=0.0, reasoning=False)
 
 app = FastAPI(title="Order Agent")
 
@@ -90,7 +90,7 @@ class OrderState(TypedDict):
     order_id: str
     cart_id: Optional[str]
 
-    items: List[CartItem]
+    items: List[dict]
     final_price: float
 
     decision: Optional[str]
@@ -123,8 +123,9 @@ async def shutdown():
 def price_cart(state):
     """Fetch latest prices for cart items"""
     items = state['items']
+    print(items)
     payload = {
-        "items": [{"product_id": i["sku"], "qty": i["qty"]} for i in items],
+        "items": [{"product_id": i.sku, "qty": i.qty} for i in items],
         "promo_codes": [],
         "only_final_price": True
     }
@@ -234,7 +235,7 @@ def create_order_node(state: OrderState):
 
     # init order in DB
     db.orders.insert_one(
-        {"_id": state['order_id'], "items": [{'sku': item['sku'], 'qty': item['qty']} for item in state['items']],
+        {"_id": state['order_id'], "items": [{'sku': item.sku, 'qty': item.qty} for item in state['items']],
          "cart_id": state['cart_id'], "status": "INIT",
          "final_price": state['final_price']})
 
@@ -275,6 +276,7 @@ graph.add_conditional_edges(
     }
 
 )
+graph.add_edge("price", "create_order")
 graph.add_edge("create_order", END)
 graph.add_edge("update_order", END)
 
@@ -331,8 +333,8 @@ async def update_order(req: OrderUpdate):
         "update_status": req.status
     }
 
-    logger.info(f'Request for update_order, cart_id = {req.cart_id}, state={state}')
-    print(f'Request for update_order, cart_id = {req.cart_id}, state={state}')
+    logger.info(f'Request for update_order, order_id = {req.order_id}, state={state}')
+    print(f'Request for update_order, order_id = {req.order_id}, state={state}')
 
     final_state = order_agent.invoke(state, config={"recursion_limit": 6})
 

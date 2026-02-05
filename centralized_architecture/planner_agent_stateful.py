@@ -37,7 +37,7 @@ PRICING_SERVICE_URL = "http://127.0.0.1:8002"
 PAYMENT_AGENT_URL = "http://127.0.0.1:8007/pay-order"
 SHIPMENT_AGENT_URL = "http://127.0.0.1:8006/book"
 
-llm = ChatOllama(model="llama3", temperature=0.3, reasoning=False)
+llm = ChatOllama(model="gpt-oss", temperature=0.3, reasoning=False)
 
 app = FastAPI(title="Planner Agent")
 
@@ -223,6 +223,7 @@ class PlannerState(TypedDict):
     shipment_status: Optional[str]
 
     decision: Optional[str]
+    phase: Optional[str]
     status: Optional[str]
     order_status: Optional[str]
 
@@ -315,7 +316,7 @@ def add_to_cart(state):
     """Create new shopping cart items"""
     if state["search_results"] and len(["search_results"]) > 0:
         target_sku = state["search_results"][0]["sku"]
-        r = requests.post(CART_AGENT_URL + "-1/item", json={"sku": target_sku, "qty": 1}, timeout=10)
+        r = requests.post(CART_AGENT_URL + "-1/items", json={"sku": target_sku, "qty": 1}, timeout=10)
         r.raise_for_status()
         return r.json()
     else:
@@ -346,7 +347,7 @@ def initialize_order(state):
 
 def update_order_status(state):
     """Update order status"""
-    r = requests.post(ORDER_AGENT_URL + "order/update",
+    r = requests.put(ORDER_AGENT_URL + "order/update",
                       json={"order_id": state["order_id"], "status": state["order_status"]},
                       timeout=10)
     r.raise_for_status()
@@ -483,6 +484,7 @@ def infer_search_query_node(state: PlannerState) -> PlannerState:
         raise ValueError(f"Invalid result output: {raw_response}") from e
 
     state["search_filters"] = search_filters
+    state["phase"] = "IN_PROGRESS"
 
     state["total_input_tokens"] += input_tokens
     state["total_output_tokens"] += output_tokens
@@ -673,32 +675,26 @@ def orchestration_reason_node(state: PlannerState):
 
         Tasks:
         - Your goal is to complete the workflow from product search, to finalizing shopping cart and purchase it.
-        - You must decide the next_action as output based on PREVIOUS_ACTION, CART_ID, and CURRENT_STATUS input
-        - Return ONLY a JSON response not python code
-
-        - Do not return middle steps and thinking procedure in response
-        - Return the next action as valid json in this schema: {{"next_action": string}}
+        - You must decide the next_action as output based on PREVIOUS_ACTION, PHASE, and CURRENT_STATUS input
+        - Return the next action as valid json in this schema: {{"next_action": string}} not programming code  without thinking steps in response
 
 
         Input:
         PREVIOUS_ACTION: {state['decision']}
-        CART_ID: {state['cart_id']}
+        PHASE: {state['phase']}
         CURRENT_STATUS: {state['status']}
 
-         Step A: Determine PHASE
-         
-        - If CURRENT_STATUS is OUT_OF_STOCK or PAYMENT_FAILED or ROLLBACK_INVENTORY -> phase = "EXCEPTION"
-        - Else if PREVIOUS_ACTION is null -> phase = "START"
-        - Else -> phase = "IN_PROGRESS"
+
+        Rules for choosing next_action:        
         
-        Step B: Choose next_action
+        If phase = "START1":
+            choose next_action as INFER_SEARCH
         
-        If phase = "START":
-            If CART_ID is null -> next_action = "INFER_SEARCH"
-            Else -> next_action = "FETCH_CART"
+        If phase = "START2": 
+            choose next_action as FETCH_CART
         
         If phase = "IN_PROGRESS":
-            Use ONLY this mapping:
+            Use ONLY this mapping to choose next_action based on PREVIOUS_ACTION:
                 INFER_SEARCH -> SEARCH
                 SEARCH -> ADD_TO_CART
                 ADD_TO_CART -> FINISH
@@ -717,17 +713,16 @@ def orchestration_reason_node(state: PlannerState):
             - If CURRENT_STATUS is ROLLBACK_INVENTORY -> next_action = "ORDER_UPDATE"
         
         Hard constraints:
-        - If PREVIOUS_ACTION is NOT null, you MUST NOT output "INFER_SEARCH".
         - You MUST NOT output the same action as PREVIOUS_ACTION.
         
         Output ONLY valid JSON:
         {{
-          "phase": "...",
           "next_action": "..."
         }}
         
         """
 
+    print(f'orchestrate_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
     logger.info(f'orchestrate_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
     st = time.time()
     response = llm.invoke(orchestration_reasoning_prompt)
@@ -813,6 +808,8 @@ def fetch_cart_node(state: PlannerState):
     print(f'Response of fetch_cart_node tool ==> {cart}, \n-------------------------------------')
 
     state["items"] = cart["items"]
+    state["phase"] = "IN_PROGRESS"
+
     state["total_input_tokens"] += cart["total_input_tokens"]
     state["total_output_tokens"] += cart["total_output_tokens"]
     state["total_llm_calls"] += cart["total_llm_calls"]
@@ -857,6 +854,7 @@ def update_order_status_node(state: PlannerState):
     logger.info(f'Response of update_order_status tool ==> {res}, \n-------------------------------------')
     print(f'Response of update_order_status tool ==> {res}, \n-------------------------------------')
 
+    state["phase"] = "IN_PROGRESS"
     state["total_input_tokens"] += res["total_input_tokens"]
     state["total_output_tokens"] += res["total_output_tokens"]
     state["total_llm_calls"] += res["total_llm_calls"]
@@ -873,6 +871,7 @@ def reserve_inventory_node(state: PlannerState):
     state["inventory_status"] = res["status"]
     if res["status"] == "OUT_OF_STOCK":
         state["status"] = "OUT_OF_STOCK"
+        state["phase"] = "EXCEPTION"
 
     state["total_input_tokens"] += res["total_input_tokens"]
     state["total_output_tokens"] += res["total_output_tokens"]
@@ -902,6 +901,8 @@ def payment_node(state: PlannerState):
         print(f'Exception in response of payment_node tool ==> {e}, \n-------------------------------------')
         state["payment_status"] = "FAILED"
         state["status"] = "PAYMENT_FAILED"
+        state["phase"] = "EXCEPTION"
+
     finally:
         # update order status
         state["order_status"] = state["status"]
@@ -916,6 +917,7 @@ def rollback_node(state: PlannerState):
     state["total_input_tokens"] += res["total_input_tokens"]
     state["total_output_tokens"] += res["total_output_tokens"]
     state["total_llm_calls"] += res["total_llm_calls"]
+    state["phase"] = "EXCEPTION"
     return state
 
 
@@ -963,7 +965,7 @@ graph.add_node("add_to_cart", add_to_cart_node)
 # phase 2
 graph.add_node("fetch_cart", fetch_cart_node)
 graph.add_node("price", pricing_node)
-graph.add_node("init_order", initialize_order)
+graph.add_node("init_order", initialize_order_node)
 graph.add_node("reserve", reserve_inventory_node)
 graph.add_node("pay", payment_node)
 graph.add_node("rollback", rollback_node)
@@ -1026,6 +1028,7 @@ def run_search_add_to_cart_procedure(search_prompt: str, user_id: Optional[str])
         "shipment_status": None,
 
         "decision": None,
+        "phase": "START1",
         "status": None,
         "order_status": None
     }
@@ -1038,8 +1041,8 @@ def run_search_add_to_cart_procedure(search_prompt: str, user_id: Optional[str])
 
         return {
             "query": search_prompt,
-            "previous_search_memory": final_state["previous_search_memory"],
-            "current_search_memory": final_state["current_search_memory"],
+            "previous_search_memory": final_state.get("previous_search_memory_summary", None),
+            "current_search_memory": final_state.get("current_search_memory_summary", None),
             "total_input_tokens": final_state["total_input_tokens"],
             "total_output_tokens": final_state["total_output_tokens"],
             "total_llm_calls": final_state["total_llm_calls"],
@@ -1088,6 +1091,7 @@ def run_checkout_cart_procedure(cart_id: str, shipment_prompt: str, user_id: Opt
         "shipment_status": None,
 
         "decision": None,
+        "phase": "START2",
         "status": None,
         "order_status": None
     }

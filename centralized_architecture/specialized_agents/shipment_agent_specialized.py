@@ -30,7 +30,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB = os.getenv("MONGO_DB", "ms_baseline")
 PORT = int(os.getenv("PORT", 8006))
 
-llm = ChatOllama(model="llama3", temperature=0.0, reasoning=False)
+llm = ChatOllama(model="gpt-oss", temperature=0.0, reasoning=False)
 
 app = FastAPI(title="Shipment Booking Agent")
 
@@ -106,8 +106,8 @@ async def carrier_booking_tool(state: ShipmentState) -> ShipmentState:
     tracking_id = str(uuid.uuid4())
     state["carrier_result"] = {
         "tracking_id": tracking_id,
-        "carrier": prefs.get("preferred_carrier", "MockCarrier"),
-        "speed": prefs.get("speed", "standard")
+        "carrier": prefs.preferred_carrier if prefs.preferred_carrier else "MockCarrier",
+        "speed": prefs.speed if prefs.speed else "standard"
     }
     logger.info(f'Response state of carrier_booking_tool ==> {state}, \n-------------------------------------')
     print(f'Response state of carrier_booking_tool ==> {state}, \n-------------------------------------')
@@ -184,12 +184,9 @@ def build_shipment_graph():
     graph.add_node("carrier_call", carrier_booking_tool)
     graph.add_node("verify", verify_shipment_reasoning)
 
-    graph.set_entry_point("load_memory")
-    graph.add_edge("load_memory", "infer_params")
-    graph.add_edge("infer_params", "carrier_call")
+    graph.set_entry_point("carrier_call")
     graph.add_edge("carrier_call", "verify")
-    graph.add_edge("verify", "update_memory")
-    graph.add_edge("update_memory", END)
+    graph.add_edge("verify", END)
 
     return graph.compile()
 
@@ -230,7 +227,7 @@ async def book_shipment(req: ShipmentRequest, user_id: Optional[str] = Query(Non
             "order_id": req.order_id,
             "address": req.address,
             "tracking_id": tracking_id,
-            "shipment_prefs": out["shipment_prefs"],
+            "shipment_prefs": dict(out["shipment_prefs"]),
             "created_at": datetime.datetime.utcnow()
         }
 
@@ -241,7 +238,7 @@ async def book_shipment(req: ShipmentRequest, user_id: Optional[str] = Query(Non
             total_input_tokens=out["total_input_tokens"],
             total_output_tokens=out["total_output_tokens"],
             total_llm_calls=out["total_llm_calls"],
-            shipment_prefs=out["shipment_prefs"],
+            shipment_prefs=dict(out["shipment_prefs"]),
             shipment_id=out["result"]["shipment_id"],
             tracking_id=out["result"]["tracking_id"]
         )
