@@ -37,7 +37,7 @@ PRICING_SERVICE_URL = "http://127.0.0.1:8002"
 PAYMENT_AGENT_URL = "http://127.0.0.1:8007/pay-order"
 SHIPMENT_AGENT_URL = "http://127.0.0.1:8006/book"
 
-llm = ChatOllama(model="gpt-oss", temperature=0.3, reasoning=False)
+llm = ChatOllama(model="qwen3", temperature=0.3, reasoning=False)
 
 app = FastAPI(title="Planner Agent")
 
@@ -255,29 +255,35 @@ def load_user_memory(user_id: str, type: str) -> Optional[str]:
     # type = shipment_preferences / search_preferences
 
     doc = db.user_memory.find_one({"user_id": user_id, "type": type})
+    logger.info(f"memory loaded for user_id = {user_id}, type = {type} as {doc}")
     return doc["summary"] if doc else None
 
 
 def delete_user_memory(user_id: str, type: str):
     db.user_memory.delete_many({"user_id": user_id, "type": type})
+    logger.info(f"memory deleted for user_id = {user_id}")
 
 
 def save_user_memory(user_id: str, summary: str, type: str):
-    db.user_memory.update_one(
+    doc = db.user_memory.update_one(
         {"user_id": user_id},
         {"$set": {"summary": summary, "type": type, "updated_at": datetime.datetime.utcnow()}},
         upsert=True
     )
+    logger.info(f"memory updated for user_id = {user_id}, type = {type} as {doc}")
 
 
 def load_search_memory_node(state: PlannerState) -> PlannerState:
     user_id = state.get("user_id")
     if not user_id:
         state["previous_search_memory_summary"] = None
+        logger.info("user_id not provided, previous_memory_summary_search set as null")
         return state
 
     summary = load_user_memory(user_id, "search_preferences")
     state["previous_search_memory_summary"] = summary
+    if summary is None:
+        logger.info(f"user_id={user_id}, previous_memory_summary_search set as null")
     return state
 
 
@@ -285,10 +291,13 @@ def load_shipment_memory_node(state: PlannerState) -> PlannerState:
     user_id = state.get("user_id")
     if not user_id:
         state["previous_shipment_memory_summary"] = None
+        logger.info("user_id not provided, previous_shipment_memory_summary set as null")
         return state
 
     summary = load_user_memory(user_id, "shipment_preferences")
     state["previous_shipment_memory_summary"] = summary
+    if summary is None:
+        logger.info(f"user_id={user_id}, previous_shipment_memory_summary set as null")
     return state
 
 
@@ -668,52 +677,26 @@ def update_shipment_memory_node(
     return state
 
 
-def orchestration_reason_node(state: PlannerState):
+def orchestration_start_reason_node(state: PlannerState):
 
     orchestration_reasoning_prompt = f"""
-        You are an autonomous planner agent that should orchestrate the workflow of retail supply chain.
+        You are an autonomous planner agent that should orchestrate the starting point of the workflow of retail supply chain.
 
         Tasks:
-        - Your goal is to complete the workflow from product search, to finalizing shopping cart and purchase it.
-        - You must decide the next_action as output based on PREVIOUS_ACTION, PHASE, and CURRENT_STATUS input
+        - You must decide the next_action as output based on PHASE input
         - Return the next action as valid json in this schema: {{"next_action": string}} not programming code  without thinking steps in response
 
 
         Input:
-        PREVIOUS_ACTION: {state['decision']}
         PHASE: {state['phase']}
-        CURRENT_STATUS: {state['status']}
-
 
         Rules for choosing next_action:        
         
         If phase = "START1":
             choose next_action as INFER_SEARCH
         
-        If phase = "START2": 
+        ELSE If phase = "START2": 
             choose next_action as FETCH_CART
-        
-        If phase = "IN_PROGRESS":
-            Use ONLY this mapping to choose next_action based on PREVIOUS_ACTION:
-                INFER_SEARCH -> SEARCH
-                SEARCH -> ADD_TO_CART
-                ADD_TO_CART -> FINISH
-                FETCH_CART -> PRICE_CART
-                PRICE_CART -> INIT_ORDER
-                INIT_ORDER -> RESERVE_INVENTORY
-                RESERVE_INVENTORY -> PROCESS_PAYMENT
-                PROCESS_PAYMENT -> INFER_SHIPMENT
-                INFER_SHIPMENT -> BOOK_SHIPMENT
-                BOOK_SHIPMENT -> ORDER_UPDATE
-                ORDER_UPDATE -> FINISH
-        
-        If phase = "EXCEPTION":
-            - If CURRENT_STATUS is OUT_OF_STOCK -> next_action = "ORDER_UPDATE"
-            - If CURRENT_STATUS is PAYMENT_FAILED -> next_action = "ROLLBACK_INVENTORY"
-            - If CURRENT_STATUS is ROLLBACK_INVENTORY -> next_action = "ORDER_UPDATE"
-        
-        Hard constraints:
-        - You MUST NOT output the same action as PREVIOUS_ACTION.
         
         Output ONLY valid JSON:
         {{
@@ -722,8 +705,8 @@ def orchestration_reason_node(state: PlannerState):
         
         """
 
-    print(f'orchestrate_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
-    logger.info(f'orchestrate_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
+    print(f'orchestration_start_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
+    logger.info(f'orchestration_start_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
     st = time.time()
     response = llm.invoke(orchestration_reasoning_prompt)
     raw_response = response.text()
@@ -735,19 +718,19 @@ def orchestration_reason_node(state: PlannerState):
     reasoning_text = response.additional_kwargs.get("reasoning_content", None)
     reasoning_tokens = response.usage_metadata.get("output_token_details", {}).get("reasoning", 0)
 
-    print(f'orchestrate_reason_node -> LLM Reasoning Text: {reasoning_text}')
+    print(f'orchestration_start_reason_node -> LLM Reasoning Text: {reasoning_text}')
     logger.info(f'LLM Raw response: {raw_response}')
-    print(f'orchestrate_reason_node -> LLM Raw response: {raw_response}')
+    print(f'orchestration_start_reason_node -> LLM Raw response: {raw_response}')
 
     logger.info(
-        f'orchestrate_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+        f'orchestration_start_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
         f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
-    print(f'orchestrate_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+    print(f'orchestration_start_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
           f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
 
     decision = parse_json_response(raw_response)
-    logger.info(f'orchestrate_reason_node -> LLM Parsed response: {decision}')
-    print(f'orchestrate_reason_node -> LLM Parsed response: {decision}')
+    logger.info(f'orchestration_start_reason_node -> LLM Parsed response: {decision}')
+    print(f'orchestration_start_reason_node -> LLM Parsed response: {decision}')
 
     state["decision"] = decision["next_action"]
     state["total_input_tokens"] += input_tokens
@@ -755,6 +738,199 @@ def orchestration_reason_node(state: PlannerState):
     state["total_llm_calls"] += 1
     return state
 
+
+def orchestration_in_progress_phase1_reason_node(state: PlannerState):
+    orchestration_reasoning_prompt = f"""
+        You are an autonomous planner agent that should orchestrate the middle steps workflow of retail supply chain.
+
+        Tasks:
+        - Your goal is to complete the workflow for product search and finalizing shopping cart
+        - You must decide the next_action as output based on PREVIOUS_ACTION, PHASE, and CURRENT_STATUS input
+        - Return the next action as valid json in this schema: {{"next_action": string}} not programming code  without thinking steps in response
+
+
+        Input:
+        PREVIOUS_ACTION: {state['decision']}
+        CURRENT_STATUS: {state['status']}
+
+
+        Rules for choosing next_action:        
+
+            Use ONLY this mapping based on PREVIOUS_ACTION to choose next_action :
+                INFER_SEARCH -> SEARCH
+                SEARCH -> UPDATE_S_MEM
+                UPDATE_S_MEM -> ADD_TO_CART
+                ADD_TO_CART -> FINISH
+
+        Output ONLY valid JSON:
+        {{
+          "next_action": "..."
+        }}
+
+        """
+
+    print(f'orchestration_in_progress_phase1_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
+    logger.info(f'orchestration_in_progress_phase1_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
+    st = time.time()
+    response = llm.invoke(orchestration_reasoning_prompt)
+    raw_response = response.text()
+    et = time.time()
+
+    input_tokens = response.usage_metadata.get("input_tokens")
+    output_tokens = response.usage_metadata.get("output_tokens")
+    total_tokens = response.usage_metadata.get("total_tokens")
+    reasoning_text = response.additional_kwargs.get("reasoning_content", None)
+    reasoning_tokens = response.usage_metadata.get("output_token_details", {}).get("reasoning", 0)
+
+    print(f'orchestration_in_progress_phase1_reason_node -> LLM Reasoning Text: {reasoning_text}')
+    logger.info(f'LLM Raw response: {raw_response}')
+    print(f'orchestration_in_progress_phase1_reason_node -> LLM Raw response: {raw_response}')
+
+    logger.info(
+        f'orchestration_in_progress_phase1_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+        f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
+    print(f'orchestration_in_progress_phase1_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+          f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
+
+    decision = parse_json_response(raw_response)
+    logger.info(f'orchestration_in_progress_phase1_reason_node -> LLM Parsed response: {decision}')
+    print(f'orchestration_in_progress_phase1_reason_node -> LLM Parsed response: {decision}')
+
+    state["decision"] = decision["next_action"]
+    state["total_input_tokens"] += input_tokens
+    state["total_output_tokens"] += output_tokens
+    state["total_llm_calls"] += 1
+    return state
+
+
+def orchestration_in_progress_phase2_reason_node(state: PlannerState):
+    orchestration_reasoning_prompt = f"""
+        You are an autonomous planner agent that should orchestrate the middle steps workflow of retail supply chain.
+
+        Tasks:
+        - Your goal is to complete the workflow for purchase a shopping cart
+        - You must decide the next_action as output based on PREVIOUS_ACTION input
+        - Return the next action as valid json in this schema: {{"next_action": string}} not programming code  without thinking steps in response
+
+
+        Input:
+        PREVIOUS_ACTION: {state['decision']}
+
+        Rules for choosing next_action:        
+
+        Use ONLY this mapping based on PREVIOUS_ACTION to choose next_action :
+            FETCH_CART -> PRICE_CART
+            PRICE_CART -> INIT_ORDER
+            INIT_ORDER -> RESERVE_INVENTORY
+            RESERVE_INVENTORY -> PROCESS_PAYMENT
+            PROCESS_PAYMENT -> LOAD_SH_MEM
+            LOAD_SH_MEM -> INFER_SHIPMENT
+            INFER_SHIPMENT -> BOOK_SHIPMENT
+            BOOK_SHIPMENT -> UPDATE_SH_MEM
+            UPDATE_SH_MEM -> ORDER_UPDATE
+            ORDER_UPDATE -> FINISH
+
+        - You MUST NOT output the same action as PREVIOUS_ACTION.
+
+        Output ONLY valid JSON:
+        {{
+          "next_action": "..."
+        }}
+
+        """
+
+    print(f'orchestration_in_progress_phase2_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
+    logger.info(f'orchestration_in_progress_phase2_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
+    st = time.time()
+    response = llm.invoke(orchestration_reasoning_prompt)
+    raw_response = response.text()
+    et = time.time()
+
+    input_tokens = response.usage_metadata.get("input_tokens")
+    output_tokens = response.usage_metadata.get("output_tokens")
+    total_tokens = response.usage_metadata.get("total_tokens")
+    reasoning_text = response.additional_kwargs.get("reasoning_content", None)
+    reasoning_tokens = response.usage_metadata.get("output_token_details", {}).get("reasoning", 0)
+
+    print(f'orchestration_in_progress_phase2_reason_node -> LLM Reasoning Text: {reasoning_text}')
+    logger.info(f'LLM Raw response: {raw_response}')
+    print(f'orchestration_in_progress_phase2_reason_node -> LLM Raw response: {raw_response}')
+
+    logger.info(
+        f'orchestration_in_progress_phase2_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+        f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
+    print(f'orchestration_in_progress_phase2_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+          f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
+
+    decision = parse_json_response(raw_response)
+    logger.info(f'orchestration_in_progress_phase2_reason_node -> LLM Parsed response: {decision}')
+    print(f'orchestration_in_progress_phase2_reason_node -> LLM Parsed response: {decision}')
+
+    state["decision"] = decision["next_action"]
+    state["total_input_tokens"] += input_tokens
+    state["total_output_tokens"] += output_tokens
+    state["total_llm_calls"] += 1
+    return state
+
+
+def orchestration_exception_reason_node(state: PlannerState):
+    orchestration_reasoning_prompt = f"""
+        You are an autonomous planner agent that should orchestrate the middle steps workflow of retail supply chain.
+
+        Tasks:
+        - Your goal is to complete the workflow for purchase a shopping cart
+        - You must decide the next_action as output based on CURRENT_STATUS input
+        - Return the next action as valid json in this schema: {{"next_action": string}} not programming code  without thinking steps in response
+
+
+        Input:
+        CURRENT_STATUS: {state['status']}
+
+        Rules for choosing next_action:        
+        
+            - If CURRENT_STATUS is OUT_OF_STOCK -> next_action = "ORDER_UPDATE"
+            - If CURRENT_STATUS is PAYMENT_FAILED -> next_action = "ROLLBACK_INVENTORY"
+            - If CURRENT_STATUS is ROLLBACK_INVENTORY -> next_action = "ORDER_UPDATE"
+
+        Output ONLY valid JSON:
+        {{
+          "next_action": "..."
+        }}
+
+        """
+
+    print(f'orchestration_exception_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
+    logger.info(f'orchestration_exception_reason_node -> LLM Call Prompt: {orchestration_reasoning_prompt}')
+    st = time.time()
+    response = llm.invoke(orchestration_reasoning_prompt)
+    raw_response = response.text()
+    et = time.time()
+
+    input_tokens = response.usage_metadata.get("input_tokens")
+    output_tokens = response.usage_metadata.get("output_tokens")
+    total_tokens = response.usage_metadata.get("total_tokens")
+    reasoning_text = response.additional_kwargs.get("reasoning_content", None)
+    reasoning_tokens = response.usage_metadata.get("output_token_details", {}).get("reasoning", 0)
+
+    print(f'orchestration_exception_reason_node -> LLM Reasoning Text: {reasoning_text}')
+    logger.info(f'LLM Raw response: {raw_response}')
+    print(f'orchestration_exception_reason_node -> LLM Raw response: {raw_response}')
+
+    logger.info(
+        f'orchestration_exception_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+        f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
+    print(f'orchestration_exception_reason_node -> LLM Token Metrics: input_tokens: {input_tokens}, output_tokens: {output_tokens},'
+          f' reasoning_tokens: {reasoning_tokens}, total_tokens: {total_tokens}, Took: f{round((et - st), 3)}')
+
+    decision = parse_json_response(raw_response)
+    logger.info(f'orchestration_exception_reason_node -> LLM Parsed response: {decision}')
+    print(f'orchestration_exception_reason_node -> LLM Parsed response: {decision}')
+
+    state["decision"] = decision["next_action"]
+    state["total_input_tokens"] += input_tokens
+    state["total_output_tokens"] += output_tokens
+    state["total_llm_calls"] += 1
+    return state
 
 # -------------- Action Nodes (Execution Tools) -----------
 
@@ -956,10 +1132,16 @@ def shipment_node(state: PlannerState):
 
 graph = StateGraph(state_schema=PlannerState)
 
+graph.add_node("init_reason", orchestration_start_reason_node)
+graph.add_node("mid_reason1", orchestration_in_progress_phase1_reason_node)
+graph.add_node("mid_reason2", orchestration_in_progress_phase2_reason_node)
+graph.add_node("exc_reason", orchestration_exception_reason_node)
+
 # phase 1
-graph.add_node("reason", orchestration_reason_node)
+graph.add_node("load_search_memory", load_search_memory_node)
 graph.add_node("infer_search", infer_search_query_node)
 graph.add_node("product_search", product_search_node)
+graph.add_node("update_search_memory", update_search_memory_node)
 graph.add_node("add_to_cart", add_to_cart_node)
 
 # phase 2
@@ -969,36 +1151,85 @@ graph.add_node("init_order", initialize_order_node)
 graph.add_node("reserve", reserve_inventory_node)
 graph.add_node("pay", payment_node)
 graph.add_node("rollback", rollback_node)
+graph.add_node("load_shipment_memory", load_shipment_memory_node)
 graph.add_node("infer_shipment", infer_shipment_params_node)
 graph.add_node("ship", shipment_node)
+graph.add_node("update_shipment_memory", update_shipment_memory_node)
 graph.add_node("order_update", update_order_status_node)
 
-graph.set_entry_point("reason")
+graph.set_entry_point("load_search_memory")
 
 graph.add_conditional_edges(
-    "reason",
+    "init_reason",
     lambda s: s["decision"],
     {
         "INFER_SEARCH": "infer_search",
+        "FETCH_CART": "fetch_cart"
+    }
+)
+
+graph.add_conditional_edges(
+    "mid_reason1",
+    lambda s: s["decision"],
+    {
         "SEARCH": "product_search",
-        "FETCH_CART": "fetch_cart",
+        "UPDATE_S_MEM": "update_search_memory",
         "ADD_TO_CART": "add_to_cart",
+        "FINISH": END
+    }
+)
+
+graph.add_conditional_edges(
+    "mid_reason2",
+    lambda s: s["decision"],
+    {
         "PRICE_CART": "price",
         "INIT_ORDER": "init_order",
         "RESERVE_INVENTORY": "reserve",
         "PROCESS_PAYMENT": "pay",
-        "ROLLBACK_INVENTORY": "rollback",
+        "LOAD_SH_MEM": "load_shipment_memory",
         "INFER_SHIPMENT": "infer_shipment",
         "BOOK_SHIPMENT": "ship",
+        "UPDATE_SH_MEM": "update_shipment_memory",
         "ORDER_UPDATE": "order_update",
         "FINISH": END
     }
 )
 
-# loop back to reasoning at each step
-for n in ["infer_search", "product_search", "add_to_cart",
-          "fetch_cart", "price", "init_order", "reserve", "pay", "rollback", "infer_shipment", "ship", "order_update"]:
-    graph.add_edge(n, "reason")
+graph.add_conditional_edges(
+    "reserve",
+    lambda s: s["status"],
+    {
+        "OUT_OF_STOCK": "exc_reason",
+        "PAYMENT_FAILED": "exc_reason",
+        "ROLLBACK_INVENTORY": "exc_reason",
+        None: "mid_reason2"
+    }
+)
+
+graph.add_conditional_edges(
+    "exc_reason",
+    lambda s: s["decision"],
+    {
+        "ROLLBACK_INVENTORY": "rollback",
+        "ORDER_UPDATE": "order_update"
+    }
+)
+
+#
+
+# loop back to init reasoning at each step
+for n in ["load_search_memory"]:
+    graph.add_edge(n, "init_reason")
+
+# loop back to mid reasoning at each step
+for n in ["infer_search", "product_search", "update_search_memory", "add_to_cart"]:
+    graph.add_edge(n, "mid_reason1")
+for n in [
+          "fetch_cart", "price", "init_order", "pay", "rollback",
+          "load_shipment_memory", "infer_shipment", "ship", "update_shipment_memory", "order_update"]:
+    graph.add_edge(n, "mid_reason2")
+
 
 planner_agent = graph.compile()
 
@@ -1037,7 +1268,7 @@ def run_search_add_to_cart_procedure(search_prompt: str, user_id: Optional[str])
         logger.info(f'Request for search_add_to_cart, search_prompt = {search_prompt}, state={state}')
         print(f'Request for search_add_to_cart, search_prompt = {search_prompt}, state={state}')
 
-        final_state = planner_agent.invoke(state, config={"recursion_limit": 14})
+        final_state = planner_agent.invoke(state, config={"recursion_limit": 20})
 
         return {
             "query": search_prompt,
@@ -1099,7 +1330,7 @@ def run_checkout_cart_procedure(cart_id: str, shipment_prompt: str, user_id: Opt
     logger.info(f'Request for checkout_cart, cart_id = {cart_id}, state={state}')
     print(f'Request for checkout_cart, cart_id = {cart_id}, state={state}')
 
-    final_state = planner_agent.invoke(state, config={"recursion_limit": 14})
+    final_state = planner_agent.invoke(state, config={"recursion_limit": 24})
 
     return {
         "order_id": final_state["order_id"],

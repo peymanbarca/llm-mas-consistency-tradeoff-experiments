@@ -28,7 +28,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB = os.getenv("MONGO_DB", "ms_baseline")
 PORT = int(os.getenv("PORT", 8000))
 
-llm = ChatOllama(model="gpt-oss", temperature=0.0, reasoning=False)
+llm = ChatOllama(model="qwen3", temperature=0.0, reasoning=False)
 
 app = FastAPI(title="Order Agent")
 
