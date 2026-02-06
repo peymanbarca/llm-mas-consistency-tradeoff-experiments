@@ -261,13 +261,13 @@ def load_user_memory(user_id: str, type: str) -> Optional[str]:
 
 def delete_user_memory(user_id: str, type: str):
     db.user_memory.delete_many({"user_id": user_id, "type": type})
-    logger.info(f"memory deleted for user_id = {user_id}")
+    logger.info(f"memory deleted for user_id = {user_id},  type = {type}")
 
 
 def save_user_memory(user_id: str, summary: str, type: str):
     doc = db.user_memory.update_one(
-        {"user_id": user_id},
-        {"$set": {"summary": summary, "type": type, "updated_at": datetime.datetime.utcnow()}},
+        {"user_id": user_id, "type": type},
+        {"$set": {"summary": summary, "updated_at": datetime.datetime.utcnow()}},
         upsert=True
     )
     logger.info(f"memory updated for user_id = {user_id}, type = {type} as {doc}")
@@ -1232,6 +1232,18 @@ for n in [
 
 
 planner_agent = graph.compile()
+
+
+@app.delete("/delete_search_memory")
+def delete_search_memory(user_id: str):
+    delete_user_memory(user_id=user_id, type="search_preferences")
+    return {"status": "memory_deleted", "user_id": user_id}
+
+
+@app.delete("/delete_shipment_memory")
+def delete_shipment_memory(user_id: str):
+    delete_user_memory(user_id=user_id, type="shipment_preferences")
+    return {"status": "memory_deleted", "user_id": user_id}
 
 
 # -------------------- Phase 1 of workflow --------------------------
