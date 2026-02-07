@@ -31,11 +31,11 @@ USER_SHIPMENT_PROMPT_GTS_EXPLICIT = [
 ]
 
 
-INIT_STOCK = 10
+INIT_STOCK = 5
 QTY = 1
 USER_ID = "123"
 
-N_TRIALS = 5
+N_TRIALS = 10
 MAX_WORKERS = int(N_TRIALS / N_TRIALS)  # Number of concurrent threads
 total_runs = 1
 

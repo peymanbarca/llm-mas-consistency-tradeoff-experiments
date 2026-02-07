@@ -112,8 +112,8 @@ async def delete_user_memory(user_id: str):
 
 async def save_user_memory(user_id: str, summary: str):
     await db.user_memory.update_one(
-        {"user_id": user_id},
-        {"$set": {"summary": summary, "type": "search_preferences", "updated_at": datetime.datetime.utcnow()}},
+        {"user_id": user_id, "type": "search_preferences"},
+        {"$set": {"summary": summary, "updated_at": datetime.datetime.utcnow()}},
         upsert=True
     )
     doc = await db.user_memory.find_one({"user_id": user_id, "type": "search_preferences"})

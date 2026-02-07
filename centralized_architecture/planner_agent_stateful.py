@@ -453,7 +453,7 @@ def infer_search_query_node(state: PlannerState) -> PlannerState:
     Task:
     - Infer the search preferences from user raw query for parts only related to product name / description and pricing filter
     - Respect user preference summary if provided to adjust product name / description and pricing filter based on it
-    - Return only a JSON with below schema without intermediate reasoning and analysis text:
+    - Return only a JSON with below schema without thinking steps in response
 
     Schema:
     {{
@@ -503,19 +503,23 @@ def infer_search_query_node(state: PlannerState) -> PlannerState:
 
 def infer_shipment_params_node(state: PlannerState) -> PlannerState:
     memory_block = (
-        f"User shipment preference summary:\n{state['previous_shipment_memory_summary']}\n\n"
+        f"User previous shipment preference summary:\n{state['previous_shipment_memory_summary']}\n\n"
         if state.get("previous_shipment_memory_summary")
-        else "No user preferences available.\n\n"
+        else "No previous user preferences summary available.\n\n"
     )
 
     prompt = f"""
     You are a shipment planning agent.
 
     Task:
-    - Infer shipment preferences from summarized memory if present
-    - If memory is missing, try to infer preferences from user input, otherwise choose safe defaults
-    - Return only a JSON with below schema without intermediate reasoning and analysis text:
+    - Infer shipment preferences from User input for speed, allowed weekend delivery or avoid it, being eco friendly and preffered carrier name
+    - If User previous preference summary is present, try to consider that as well but give more priority to user input to infer conflicting parameters
+        and only infer parameters from previous preference summary when they are not specified in user input
+    - If any parameter can not be specified from user input and previous preference, choose safe defaults
+    - Return only a JSON with below schema without thinking steps in response
 
+    - Rules for infer avoid_weekend_delivery:
+        if a range of week days specified -> avoid_weekend_delivery should be true
 
     Schema:
     {{
@@ -744,28 +748,27 @@ def orchestration_in_progress_phase1_reason_node(state: PlannerState):
         You are an autonomous planner agent that should orchestrate the middle steps workflow of retail supply chain.
 
         Tasks:
-        - Your goal is to complete the workflow for product search and finalizing shopping cart
-        - You must decide the next_action as output based on PREVIOUS_ACTION, PHASE, and CURRENT_STATUS input
+        - You must decide the next_action as output based on PREVIOUS_ACTION input
         - Return the next action as valid json in this schema: {{"next_action": string}} not programming code  without thinking steps in response
 
-
+        Rules for choosing next_action:        
+            If PREVIOUS_ACTION is:
+            - "INFER_SEARCH"   -> next_action = "SEARCH"
+            - "SEARCH"         -> next_action = "UPDATE_S_MEM"
+            - "UPDATE_S_MEM"   -> next_action = "ADD_TO_CART"
+            - "ADD_TO_CART"    -> next_action = "FINISH"
+            
+            If PREVIOUS_ACTION is not in this list:
+            - next_action = "FINISH"
+            
+        Specific constraints:
+            - You MUST NOT repeat PREVIOUS_ACTION as next_action.
+            - You MUST NOT skip steps.
+            - You MUST NOT go backwards.
+            
+        
         Input:
         PREVIOUS_ACTION: {state['decision']}
-        CURRENT_STATUS: {state['status']}
-
-
-        Rules for choosing next_action:        
-
-            Use ONLY this mapping based on PREVIOUS_ACTION to choose next_action :
-                INFER_SEARCH -> SEARCH
-                SEARCH -> UPDATE_S_MEM
-                UPDATE_S_MEM -> ADD_TO_CART
-                ADD_TO_CART -> FINISH
-
-        Output ONLY valid JSON:
-        {{
-          "next_action": "..."
-        }}
 
         """
 

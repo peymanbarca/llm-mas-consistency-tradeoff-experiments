@@ -88,8 +88,8 @@ async def delete_user_memory(user_id: str):
 
 async def save_user_memory(user_id: str, summary: str):
     await db.user_memory.update_one(
-        {"user_id": user_id},
-        {"$set": {"summary": summary, "type": "shipment_preferences", "updated_at": datetime.datetime.utcnow()}},
+        {"user_id": user_id, "type": "shipment_preferences"},
+        {"$set": {"summary": summary, "updated_at": datetime.datetime.utcnow()}},
         upsert=True
     )
 
@@ -158,19 +158,25 @@ def parse_json_response(text: str):
 
 
 async def infer_shipment_params(state: ShipmentState) -> ShipmentState:
+
     memory_block = (
-        f"User shipment preference summary:\n{state['previous_memory_summary']}\n\n"
+        f"User previous shipment preference summary:\n{state['previous_memory_summary']}\n\n"
         if state.get("previous_memory_summary")
-        else "No user preferences available.\n\n"
+        else "No previous user preferences summary available.\n\n"
     )
 
     prompt = f"""
     You are a shipment planning agent.
 
     Task:
-    - Infer shipment preferences from summarized memory if present
-    - If memory is missing, try to infer preferences from user input, otherwise choose safe defaults
-    - Return only a JSON with below schema without intermediate reasoning and analysis text:
+    - Infer shipment preferences from User input for speed, allowed weekend delivery or avoid it, being eco friendly and preffered carrier name
+    - If User previous preference summary is present, try to consider that as well but give more priority to user input to infer conflicting parameters
+        and only infer parameters from previous preference summary when they are not specified in user input
+    - If any parameter can not be specified from user input and previous preference, choose safe defaults
+    - Return only a JSON with below schema without thinking steps in response
+
+    - Rules for infer avoid_weekend_delivery:
+        if a range of week days specified -> avoid_weekend_delivery should be true
 
 
     Schema:
@@ -180,10 +186,10 @@ async def infer_shipment_params(state: ShipmentState) -> ShipmentState:
       "avoid_weekend_delivery": bool,
       "preferred_carrier": string | null
     }}
-    
+
     User input:
     {state.get("request").get("main_query")}
-    
+
     {memory_block}
 
     Defaults:
@@ -191,8 +197,9 @@ async def infer_shipment_params(state: ShipmentState) -> ShipmentState:
     - eco_friendly = false
     - avoid_weekend_delivery = false
     - preferred_carrier = null
-    
+
     """
+
     logger.info(f'infer_shipment_params_node -> LLM Call Prompt: {prompt}')
 
     st = time.time()
