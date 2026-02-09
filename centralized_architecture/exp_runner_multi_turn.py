@@ -10,11 +10,10 @@ from collections import Counter
 from thefuzz import fuzz
 
 # ---------------- CONFIG ----------------
-ORDER_SERVICE_URL = "http://127.0.0.1:8000/cart/checkout"
-SEARCH_URL = "http://localhost:8008/search"
-DELETE_SEARCH_MEMORY_URL = "http://localhost:8008/delete_memory"
-DELETE_SHIPMENT_MEMORY_URL = "http://localhost:8006/delete_memory"
-SHOPPING_CART_ADD_URL = "http://127.0.0.1:8003/cart/-1/items"
+PLANNER_CART_CHECKOUT_URL = "http://127.0.0.1:8010/cart/checkout"
+PLANNER_SEARCH_URL = "http://localhost:8010/cart/add"
+DELETE_SEARCH_MEMORY_URL = "http://localhost:8010/delete_search_memory"
+DELETE_SHIPMENT_MEMORY_URL = "http://localhost:8010/delete_shipment_memory"
 
 # ---------------------------- Turn 1 Explicit (to create meaningful memory) ---------------
 USER_SEARCH_PROMPTS_EXPLICIT = [
@@ -30,6 +29,19 @@ USER_SHIPMENT_PROMPT_GTS_EXPLICIT = [
     {"speed": "cheapest", "eco_friendly": False, "avoid_weekend_delivery": True, "preferred_carrier": None}
 ]
 
+# ---------------------------- Turn 2 Vague (to check role of memory) ---------------
+USER_SEARCH_PROMPTS_VAGUE = [
+    "looking for cheap headphone"
+]
+USER_SHIPMENT_PROMPTS_VAGUE = [
+    "Please ship ASAP with the cheapest shipping option available."
+]
+USER_SEARCH_PROMPT_GTS_VAGUE = [
+    {"product": "noise cancelling white headphone", "min_price": None, "max_price": None}
+]
+USER_SHIPMENT_PROMPT_GTS_VAGUE = [
+    {"speed": "cheapest", "eco_friendly": False, "avoid_weekend_delivery": False, "preferred_carrier": None}
+]
 
 INIT_STOCK = 5
 QTY = 1
@@ -48,10 +60,10 @@ MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017/")
 DB_NAME = os.environ.get("DB_NAME", "ms_baseline")
 
 # clear previous logs
-logs = ['logs/order_agent.log', 'stateful_agents/logs/inventory_agent.log', 'logs/payment_agent.log',
-        'logs/pricing_agent.log',
-        'logs/procurement_agent.log', 'stateful_agents/logs/product_search_agent.log',
-        'stateful_agents/logs/shipment_agent.log',
+logs = ['logs/order_agent.log', 'logs/inventory_agent.log', 'logs/payment_agent.log',
+        'logs/pricing_agent.log', 'logs/planner_agent.log',
+        'logs/procurement_agent.log', 'logs/product_search_agent.log',
+        'logs/shipment_agent.log',
         'logs/shopping_cart_agent.log']
 for log in logs:
     with open(file=log, mode='w') as f:
@@ -64,25 +76,53 @@ def real_db():
     return client, db
 
 
-def run_trial_for_full_workflow_single_turn(trial_id: int, delay: float, drop_rate: int,
-                                           user_search_prompt: str, user_shipment_prompt: str):
+def run_trial_for_full_workflow_multi_turn(trial_id: int, delay: float, drop_rate: int,
+                                           user_search_prompt: str, user_shipment_prompt: str,
+                                           user_search_prompt_next: str, user_shipment_prompt_next: str):
     result = {"trial": trial_id, "threads": MAX_WORKERS,
               "total_input_tokens": 0, "total_output_tokens": 0,
               "total_llm_calls": 0, "stateless": stateless, "total_without_search_result": 0}
 
-    print(f"Trial {trial_id} started ... ")
+    # delete memory in each trial of multi-session
+    if stateless is False:
+        requests.delete(url=DELETE_SEARCH_MEMORY_URL + f"?user_id={USER_ID}")
+        requests.delete(url=DELETE_SHIPMENT_MEMORY_URL + f"?user_id={USER_ID}")
+        print(f"Memory cleaned, Trial {trial_id} started ... ")
 
     start = time.time()
     try:
-        # --------------------------- product search -------------------------------
-        st = time.time()
-        params = {
-            "q": urllib.parse.quote_plus(user_search_prompt),
-        }
+
+        # --------------------------- phase 1: product search & finalize cart -------------------------------
+        params = {}
         if stateless is False:
             params["user_id"] = USER_ID
 
-        r = requests.get(url=SEARCH_URL, params=params)
+        # --------------------------- product search turn 1 & leave -------------------------------
+        r = requests.post(url=PLANNER_SEARCH_URL, params=params, json={"search_prompt": user_search_prompt})
+        r.raise_for_status()
+        res = r.json()
+        # print(f"Result of product search: {res}, latency: {search_latency}")
+        if len(res["results"]) == 0:
+            result["total_input_tokens"] += res["total_input_tokens"]
+            result["total_output_tokens"] += res["total_output_tokens"]
+            result["total_llm_calls"] += res["total_llm_calls"]
+            result["selected_sku"] = None
+            print(f"Trial {trial_id}: Could not find any product")
+            return result
+
+        result["total_input_tokens"] += res["total_input_tokens"]
+        result["total_output_tokens"] += res["total_output_tokens"]
+        result["total_llm_calls"] += res["total_llm_calls"]
+
+        print(f"Trial {trial_id}: Phase 1, Product search turn 1 stop, going to resume product search turn 2")
+
+        # --------------------------- product search turn 2 -------------------------------
+        st = time.time()
+        params = {}
+        if stateless is False:
+            params["user_id"] = USER_ID
+
+        r = requests.post(url=PLANNER_SEARCH_URL, params=params, json={"search_prompt": user_search_prompt_next})
         r.raise_for_status()
         et = time.time()
         search_latency = round((et - st), 3)
@@ -94,8 +134,8 @@ def run_trial_for_full_workflow_single_turn(trial_id: int, delay: float, drop_ra
             result["total_output_tokens"] += res["total_output_tokens"]
             result["total_llm_calls"] += res["total_llm_calls"]
             result["search_filters"] = search_filters
-            result["previous_search_memory"] = res["previous_memory"]
-            result["current_search_memory"] = res["current_memory"]
+            result["previous_search_memory"] = res["previous_search_memory"]
+            result["current_search_memory"] = res["current_search_memory"]
 
             result["search_latency"] = search_latency
             result["selected_sku"] = None
@@ -109,24 +149,17 @@ def run_trial_for_full_workflow_single_turn(trial_id: int, delay: float, drop_ra
         result["total_output_tokens"] += res["total_output_tokens"]
         result["total_llm_calls"] += res["total_llm_calls"]
         result["search_filters"] = search_filters
-        result["previous_search_memory"] = res["previous_memory"]
-        result["current_search_memory"] = res["current_memory"]
+        result["previous_search_memory"] = res["previous_search_memory"]
+        result["current_search_memory"] = res["current_search_memory"]
         result["search_latency"] = search_latency
         result["selected_sku"] = sku
-
-        # -------------------------- create / add to cart --------------------------------
-        r = requests.post(url=SHOPPING_CART_ADD_URL, json={"sku": sku, "qty": QTY})
-        r.raise_for_status()
-        res = r.json()
-        # print(f"Result of add to cart: {res}")
         cart_id = res["cart_id"]
-        result["cart_id"] = cart_id
-        result["total_input_tokens"] += res["total_input_tokens"]
-        result["total_output_tokens"] += res["total_output_tokens"]
-        result["total_llm_calls"] += res["total_llm_calls"]
+        result["cart_id"] = res["cart_id"]
 
-        # ------------------------------ complete main workflow for purchase cart ---------------------------
-        resp = requests.post(ORDER_SERVICE_URL + f"?user_id={USER_ID}" if stateless is False else ORDER_SERVICE_URL,
+        # todo: initial shipment prompt and leave
+
+        # ------------------------------ phase 2: complete main workflow for purchase cart ---------------------------
+        resp = requests.post(PLANNER_CART_CHECKOUT_URL + f"?user_id={USER_ID}" if stateless is False else PLANNER_CART_CHECKOUT_URL,
                              json={"cart_id": cart_id, "shipment_prompt": user_shipment_prompt},
                              timeout=30)
         elapsed = time.time() - start
@@ -147,6 +180,7 @@ def run_trial_for_full_workflow_single_turn(trial_id: int, delay: float, drop_ra
         else:
             print(f"Trial {trial_id}: ERROR: {resp.json()}")
             return {"trial": trial_id, "status": "error", "elapsed": round(elapsed, 3)}
+
     except Exception as e:
         elapsed = time.time() - start
         print(f"Trial {trial_id}: Exception {e}")
@@ -286,7 +320,7 @@ check_search_semantic_consistency_and_reproducibility = check_search_semantic_co
 check_shipment_semantic_consistency_and_reproducibility = check_shipment_semantic_consistency_and_reproducibility()
 
 
-def run(user_search_prompt, user_shipment_prompt,
+def run(user_search_prompt, user_shipment_prompt, user_search_prompt_next, user_shipment_prompt_next,
         user_search_prompt_gt, user_shipment_prompt_gt, run_results, i, j):
     requests.post("http://localhost:8000/clear_orders", json={})
     requests.post("http://localhost:8001/reset_stocks", json={
@@ -301,17 +335,13 @@ def run(user_search_prompt, user_shipment_prompt,
 
     print('DB state cleaned ...')
 
-    if stateless is False:
-        requests.delete(url=DELETE_SEARCH_MEMORY_URL + f"?user_id={USER_ID}")
-        requests.delete(url=DELETE_SHIPMENT_MEMORY_URL + f"?user_id={USER_ID}")
-        print("Memory cleaned ... ")
-
     results = []
 
     # ---------------- PARALLEL EXECUTION (x N_Trials) ----------------
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(run_trial_for_full_workflow_single_turn, n, DELAY, DROP_RATE,
-                                   user_search_prompt, user_shipment_prompt)
+        futures = [executor.submit(run_trial_for_full_workflow_multi_turn, n, DELAY, DROP_RATE,
+                                   user_search_prompt, user_shipment_prompt,
+                                   user_search_prompt_next, user_shipment_prompt_next)
                    for n in range(1, N_TRIALS + 1)]
         for future in as_completed(futures):
             results.append(future.result())
@@ -383,7 +413,7 @@ def run(user_search_prompt, user_shipment_prompt,
 
 if __name__ == '__main__':
 
-    report_name = f"results/single-turn/p2p_architecture_stateless_{stateless}_delay_{DELAY}_drop_{DROP_RATE}_results.json"
+    report_name = f"results/multi-turn/p2p_architecture_stateless_{stateless}_delay_{DELAY}_drop_{DROP_RATE}_results.json"
     with open(report_name, "w") as f:
         f.write("")
 
@@ -394,13 +424,18 @@ if __name__ == '__main__':
         for j in range(len(USER_SEARCH_PROMPTS_EXPLICIT)):
             print(f"Prompts round {j} ")
 
-            # single call with explicit prompts
+            # first call with explicit prompts
             user_search_prompt = USER_SEARCH_PROMPTS_EXPLICIT[j]
             user_shipment_prompt = USER_SHIPMENT_PROMPTS_EXPLICIT[j]
             user_search_prompt_gt = USER_SEARCH_PROMPT_GTS_EXPLICIT[j]
             user_shipment_prompt_gt = USER_SHIPMENT_PROMPT_GTS_EXPLICIT[j]
 
+            # then call with vague prompts (so stateful agents constructs memory and defuse LLM variability to infer)
+            user_search_prompt_next = USER_SEARCH_PROMPTS_VAGUE[j]
+            user_shipment_prompt_next = USER_SHIPMENT_PROMPTS_VAGUE[j]
+
             run(user_search_prompt, user_shipment_prompt,
+                user_search_prompt_next, user_shipment_prompt_next,
                 user_search_prompt_gt, user_shipment_prompt_gt,
                 run_results, i, j)
 

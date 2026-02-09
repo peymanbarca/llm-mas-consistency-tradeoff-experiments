@@ -49,7 +49,7 @@ DB_NAME = os.environ.get("DB_NAME", "ms_baseline")
 
 # clear previous logs
 logs = ['logs/order_agent.log', 'logs/inventory_agent.log', 'logs/payment_agent.log',
-        'logs/pricing_agent.log',
+        'logs/pricing_agent.log', 'logs/planner_agent.log',
         'logs/procurement_agent.log', 'logs/product_search_agent.log',
         'logs/shipment_agent.log',
         'logs/shopping_cart_agent.log']
@@ -124,6 +124,8 @@ def run_trial_for_full_workflow_single_turn(trial_id: int, delay: float, drop_ra
             result["order_id"] = res["order_id"]
             result["status"] = res["status"]
             result["shipment_prefs"] = res["shipment_prefs"]
+            result["previous_shipment_memory"] = res["previous_shipment_memory"]
+            result["current_shipment_memory"] = res["current_shipment_memory"]
             result["total_input_tokens"] += res["total_input_tokens"]
             result["total_output_tokens"] += res["total_output_tokens"]
             result["total_llm_calls"] += res["total_llm_calls"]
@@ -287,6 +289,8 @@ def run(user_search_prompt, user_shipment_prompt,
     requests.post("http://localhost:8003/clear_carts", json={})
 
     print('DB state cleaned ...')
+
+    # delete memory in before each batch of trial (so memory is evolved during trials)
 
     if stateless is False:
         requests.delete(url=DELETE_SEARCH_MEMORY_URL + f"?user_id={USER_ID}")

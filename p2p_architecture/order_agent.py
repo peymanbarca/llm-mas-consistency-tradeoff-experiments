@@ -35,7 +35,7 @@ PRICING_SERVICE_URL = "http://127.0.0.1:8002"
 PAYMENT_AGENT_URL = "http://127.0.0.1:8007/pay-order"
 SHIPMENT_AGENT_URL = "http://127.0.0.1:8006/book"
 
-llm = ChatOllama(model="llama3", temperature=0.5, reasoning=False)
+llm = ChatOllama(model="qwen3", temperature=0.5, reasoning=False)
 
 app = FastAPI(title="Order Agent")
 
@@ -88,6 +88,8 @@ class CartCheckoutRes(BaseModel):
     order_id: str
     status: str
     shipment_prefs: Optional[dict]
+    previous_shipment_memory: Optional[str]
+    current_shipment_memory: Optional[str]
     total_input_tokens: int
     total_output_tokens: int
     total_llm_calls: int
@@ -113,6 +115,8 @@ class OrderState(TypedDict):
     payment_status: Optional[str]
     shipment_status: Optional[str]
     shipment_prefs: Optional[dict]
+    previous_shipment_memory: Optional[str]
+    current_shipment_memory: Optional[str]
 
     decision: Optional[str]
     status: Optional[str]
@@ -402,7 +406,10 @@ def shipment_node(state: OrderState):
         state["shipment_status"] = "BOOKED"
         state["status"] = "COMPLETED"
 
+        state["previous_shipment_memory"] = res["previous_memory"]
+        state["current_shipment_memory"] = res["current_memory"]
         state["shipment_prefs"] = res["shipment_prefs"]
+
         state["total_input_tokens"] += res["total_input_tokens"]
         state["total_output_tokens"] += res["total_output_tokens"]
         state["total_llm_calls"] += res["total_llm_calls"]
@@ -493,6 +500,8 @@ def checkout_cart_agent(cart_id: str, shipment_prompt: str, user_id: Optional[st
         "order_id": final_state["order_id"],
         "status": final_state["status"],
         "shipment_prefs": final_state.get("shipment_prefs", None),
+        "previous_shipment_memory": final_state.get("previous_shipment_memory", None),
+        "current_shipment_memory": final_state.get("current_shipment_memory", None),
         "total_input_tokens": final_state["total_input_tokens"],
         "total_output_tokens": final_state["total_output_tokens"],
         "total_llm_calls": final_state["total_llm_calls"]

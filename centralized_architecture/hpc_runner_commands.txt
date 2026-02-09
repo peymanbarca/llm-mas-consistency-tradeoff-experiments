@@ -1,0 +1,50 @@
+
+
+
+
+
+
+
+
+netstat -tulpn | grep 8006
+kill -9 pid
+fuser -k 8006/tcp
+rm -f *.log
+
+-----------------------
+
+Centralized architecture agents:
+
+        nohup python3 run_as_service.py pricing_service 8002 >& pricing_service.log &
+
+        Product Search Agent:
+
+            nohup python3 run_as_service.py product_search_agent_specialized 8008 >& product_search_agent_specialized.log &
+
+        Shipment Agent:
+
+            nohup python3 run_as_service.py shipment_agent_specialized 8006 >& shipment_agent_specialized.log &
+
+        Shopping Cart Agent:
+
+            nohup python3 run_as_service.py shopping_cart_agent_specialized 8003 >& shopping_cart_agent_specialized.log &
+
+        Payment Agent:
+
+            nohup python3 run_as_service.py payment_agent_specialized 8007 >& payment_agent_specialized.log &
+
+        Order Agent:
+
+            nohup python3 run_as_service.py order_agent_specialized 8000 >& order_agent_specialized.log &
+
+        Inventory Agent:
+
+            nohup python3 run_as_service.py inventory_agent_specialized 8001 >& inventory_agent_specialized.log &
+
+        Planner Agent:
+
+            nohup python3 run_as_service.py planner_agent_stateful 8010 >& planner_agent_stateful.log &
+
+                curl -X 'POST' 'http://0.0.0.0:8010/cart/add?user_id=1' -H 'accept: application/json' -H 'Content-Type: application/json' -d '{"search_prompt": "looking for noise cancelling white headphone  under 300$"}'
+
+                curl -X 'POST' 'http://0.0.0.0:8010/cart/checkout?user_id=1' -H 'accept: application/json' -H 'Content-Type: application/json' -d '{"shipment_prompt": "Please ship this between Monday to Wednesday with the cheapest shipping option available", "cart_id": "94899d07-7e95-4113-a133-a7175d655ef2"}'

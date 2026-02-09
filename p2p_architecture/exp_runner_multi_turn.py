@@ -44,11 +44,11 @@ USER_SHIPMENT_PROMPT_GTS_VAGUE = [
     {"speed": "cheapest", "eco_friendly": False, "avoid_weekend_delivery": False, "preferred_carrier": None}
 ]
 
-INIT_STOCK = 10
-QTY = 2
+INIT_STOCK = 5
+QTY = 1
 USER_ID = "123"
 
-N_TRIALS = 5
+N_TRIALS = 10
 MAX_WORKERS = int(N_TRIALS / N_TRIALS)  # Number of concurrent threads
 total_runs = 1
 
@@ -172,7 +172,7 @@ def run_trial_for_full_workflow_multi_turn(trial_id: int, delay: float, drop_rat
         result["total_output_tokens"] += res["total_output_tokens"]
         result["total_llm_calls"] += res["total_llm_calls"]
 
-        # initial shipment prompt and leave
+        # todo: initial shipment prompt and leave
 
         # ------------------------------ resume to complete main workflow for purchase cart ---------------------------
         resp = requests.post(ORDER_SERVICE_URL + f"?user_id={USER_ID}" if stateless is False else ORDER_SERVICE_URL,
@@ -184,6 +184,8 @@ def run_trial_for_full_workflow_multi_turn(trial_id: int, delay: float, drop_rat
             result["order_id"] = res["order_id"]
             result["status"] = res["status"]
             result["shipment_prefs"] = res["shipment_prefs"]
+            result["previous_shipment_memory"] = res["previous_shipment_memory"]
+            result["current_shipment_memory"] = res["current_shipment_memory"]
             result["total_input_tokens"] += res["total_input_tokens"]
             result["total_output_tokens"] += res["total_output_tokens"]
             result["total_llm_calls"] += res["total_llm_calls"]

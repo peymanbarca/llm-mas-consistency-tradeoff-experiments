@@ -159,6 +159,7 @@ class ShipmentResponse(BaseModel):
 
 # ----------------- Main DTOs -------------------
 
+# --------- phase 1 ----------
 class ProductSearchReq(BaseModel):
     search_prompt: str
 
@@ -174,7 +175,7 @@ class ProductSearchFinalRes(BaseModel):
     results: List[ProductSearchResultItem]
     cart_id: str
 
-
+# ---------- phase 2 -----------
 class CartCheckoutReq(BaseModel):
     cart_id: str
     shipment_prompt: str
@@ -183,6 +184,8 @@ class CartCheckoutReq(BaseModel):
 class CartCheckoutRes(BaseModel):
     order_id: str
     status: str
+    previous_shipment_memory: Optional[str]
+    current_shipment_memory: Optional[str]
     shipment_prefs: Optional[dict]
     total_input_tokens: int
     total_output_tokens: int
@@ -1350,6 +1353,8 @@ def run_checkout_cart_procedure(cart_id: str, shipment_prompt: str, user_id: Opt
     return {
         "order_id": final_state["order_id"],
         "status": final_state["status"],
+        "previous_shipment_memory": final_state.get("previous_shipment_memory_summary", None),
+        "current_shipment_memory": final_state.get("current_shipment_memory_summary", None),
         "shipment_prefs": final_state.get("shipment_prefs", None),
         "total_input_tokens": final_state["total_input_tokens"],
         "total_output_tokens": final_state["total_output_tokens"],
